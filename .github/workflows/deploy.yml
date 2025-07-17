@@ -125,13 +125,13 @@ jobs:
           curl -o docker-compose.yml https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose.yml
           
           # 환경 변수 설정
-          cat > .env << EOF
+          cat > .env << 'ENVEOF'
           SUPABASE_URL=${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
           GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
           JWT_SECRET=${{ secrets.JWT_SECRET }}
           GITHUB_REPOSITORY=${{ github.repository }}
-          EOF
+          ENVEOF
           
           # 새 컨테이너 시작
           docker-compose up -d
