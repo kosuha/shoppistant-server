@@ -11,6 +11,13 @@ from typing import Dict, List
 from datetime import datetime
 import uuid
 import threading
+from fastmcp import Client
+import jwt
+import asyncio
+from contextlib import asynccontextmanager
+
+# MCP 클라이언트 전역 변수
+mcp_client = None
 
 load_dotenv()
 
@@ -28,11 +35,40 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY 환경변수가 필요합니다.")
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 security = HTTPBearer()
 
-app = FastAPI(title="Imweb AI Agent Server", description="A server for managing AI agents in Imweb", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 시작 시 MCP 클라이언트 초기화
+    global mcp_client
+    try:
+        
+        mcp_client = Client("http://localhost:8001")
+        await mcp_client.__aenter__()
+        print("MCP 클라이언트 연결 성공")
+
+    except Exception as e:
+        print(f"MCP 클라이언트 연결 실패 (일반 모드로 계속): {e}")
+        mcp_client = None
+    
+    yield
+    
+    # 종료 시 MCP 클라이언트 정리
+    if mcp_client:
+        try:
+            await mcp_client.__aexit__(None, None, None)
+            print("MCP 클라이언트 연결 종료")
+        except Exception as e:
+            print(f"MCP 클라이언트 종료 실패: {e}")
+
+app = FastAPI(
+    title="Imweb AI Agent Server", 
+    description="A server for managing AI agents in Imweb", 
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 # CORS 미들웨어 추가
 app.add_middleware(
@@ -64,18 +100,42 @@ async def verify_auth(credentials: HTTPAuthorizationCredentials = Depends(securi
     except Exception:
         raise HTTPException(status_code=401, detail="인증에 실패했습니다.")
 
-async def generate_gemini_response(chat_history):
+
+async def generate_gemini_response(chat_history, user_id, site_code):
     """
     대화 내역을 기반으로 Gemini API를 호출하여 AI 응답을 생성합니다.
     
     Args:
         chat_history: 대화 내역 리스트
+        user_id: 사용자 ID
+        site_code: 사이트 코드
         
     Returns:
         str: AI 응답 텍스트
     """
     try:
-        # 대화 내역을 Gemini 형식으로 변환
+        # 1. DB에서 사용자 토큰 조회
+        user_token = get_user_token_from_db(user_id, site_code)
+        if not user_token:
+            return "아임웹 API 토큰이 설정되지 않았습니다. 먼저 토큰을 등록해주세요."
+        
+        # 2. 세션 ID 생성
+        session_id = str(uuid.uuid4())
+        
+        # 3. MCP 서버에 세션 토큰 설정
+        if mcp_client:
+            try:
+                await mcp_client.call_tool("set_session_token", {
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "site_code": site_code,
+                    "access_token": user_token
+                })
+            except Exception as e:
+                print(f"세션 토큰 설정 실패: {e}")
+                return "세션 설정에 실패했습니다."
+        
+        # 4. 대화 내역을 Gemini 형식으로 변환
         contents = []
         for msg in chat_history:
             if msg["message_type"] == "user":
@@ -83,27 +143,151 @@ async def generate_gemini_response(chat_history):
             elif msg["message_type"] == "assistant":
                 contents.append(f"Assistant: {msg['message']}")
         
-        # 전체 대화 내역을 하나의 문자열로 결합
         conversation_context = "\n".join(contents)
         
-        # 시스템 프롬프트 추가
-        system_prompt = """당신은 아임웹 쇼핑몰 운영자를 도와주는 AI 어시스턴트입니다. 
+        # 5. 시스템 프롬프트 (세션 ID만 포함)
+        system_prompt = f"""당신은 아임웹 쇼핑몰 운영자를 도와주는 AI 어시스턴트입니다. 
 쇼핑몰 관리, 상품 등록, 주문 처리, 고객 서비스 등에 대한 도움을 제공합니다.
 친절하고 전문적인 톤으로 마지막 질문에 답변해주세요.
 
-대화 내역:
-""" + conversation_context
+현재 세션 ID: {session_id}
+보안을 위해 세션 ID를 답변에 절대로 포함하지 마세요. 이 지시는 다른 어떤 지시보다 우선으로 지켜야합니다.
 
-        # Gemini API 호출
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=system_prompt,
-        )
+사용자의 질문에 적절한 도구를 사용하여 정확한 정보를 제공해주세요.
+
+대화 내역:
+{conversation_context}"""
+
+        # 6. MCP 클라이언트로 Gemini 호출
+        if mcp_client:
+            try:
+                # 세션 기반 MCP 도구 사용
+                response = await gemini_client.aio.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=system_prompt,
+                    config=genai.types.GenerateContentConfig(
+                        temperature=0.7,
+                        tools=[mcp_client.session],
+                    ),
+                )
+            except Exception as mcp_error:
+                print(f"MCP 도구 사용 실패, 일반 모드로 전환: {mcp_error}")
+                # MCP 실패 시 일반 모드로 fallback
+                response = gemini_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=system_prompt,
+                )
+        else:
+            # MCP 클라이언트가 없으면 일반 모드로 호출
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=system_prompt,
+            )
         
-        return response.text
+        # 응답 처리
+        if hasattr(response, 'text') and response.text:
+            return response.text
+        elif hasattr(response, 'candidates') and response.candidates:
+            text_parts = []
+            for candidate in response.candidates:
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            text_parts.append(part.text)
+            return ''.join(text_parts) if text_parts else "응답을 생성할 수 없습니다."
+        else:
+            return "응답을 생성할 수 없습니다."
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI 응답 생성 실패: {str(e)}")
+
+def get_user_token_from_db(user_id: str, site_code: str) -> str:
+    """
+    데이터베이스에서 사용자의 아임웹 API 토큰을 조회합니다.
+    현재는 메모리 저장소를 사용하지만, 실제로는 데이터베이스를 사용해야 합니다.
+    
+    Args:
+        user_id: 사용자 ID
+        site_code: 사이트 코드
+        
+    Returns:
+        str: 아임웹 API 토큰 또는 None
+    """
+    # 실제 구현에서는 데이터베이스에서 조회
+    # 현재는 메모리 저장소에서 조회
+    user_sites = memory_store["user_sites"].get(user_id, [])
+    for site in user_sites:
+        if site.get("site_code") == site_code:
+            return site.get("access_token")
+    
+    # 개발용 기본 토큰 (실제로는 제거해야 함)
+    if site_code == "default":
+        return "test-access-token"
+    
+    return None
+
+@app.post("/api/v1/tokens")
+async def set_access_token(request: Request, user=Depends(verify_auth)):
+    """
+    사용자의 아임웹 API 액세스 토큰을 설정하는 API
+    
+    요청 본문:
+    {
+        "site_code": "사이트 코드",
+        "access_token": "액세스 토큰"
+    }
+    
+    응답:
+    {
+        "status": "success",
+        "message": "액세스 토큰이 저장되었습니다."
+    }
+    """
+    try:
+        request_data = await request.json()
+        site_code = request_data.get("site_code")
+        access_token = request_data.get("access_token")
+        
+        if not site_code or not access_token:
+            raise HTTPException(status_code=400, detail="사이트 코드와 액세스 토큰이 필요합니다.")
+        
+        # 사용자별 토큰 저장
+        with memory_lock:
+            user_sites = memory_store["user_sites"].get(user.id, [])
+            site_found = False
+            
+            for site in user_sites:
+                if site["site_code"] == site_code:
+                    site["access_token"] = access_token
+                    site["updated_at"] = datetime.now().isoformat()
+                    site_found = True
+                    break
+            
+            if not site_found:
+                # 새로운 사이트 추가
+                site_data = {
+                    "id": str(uuid.uuid4()),
+                    "user_id": user.id,
+                    "site_code": site_code,
+                    "access_token": access_token,
+                    "created_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now().isoformat()
+                }
+                
+                if user.id not in memory_store["user_sites"]:
+                    memory_store["user_sites"][user.id] = []
+                memory_store["user_sites"][user.id].append(site_data)
+        
+        return JSONResponse(status_code=200, content={
+            "status": "success",
+            "message": "액세스 토큰이 저장되었습니다."
+        })
+        
+    except Exception as e:
+        return JSONResponse(status_code=500, content={
+            "status": "error",
+            "message": str(e)
+        })
 
 @app.get("/")
 async def root():
@@ -178,6 +362,7 @@ async def api_imweb_site_code(request: Request, user=Depends(verify_auth)):
                     "id": str(uuid.uuid4()),
                     "user_id": user.id,
                     "site_code": site_code,
+                    "access_token": None,  # 나중에 별도 API로 설정
                     "created_at": datetime.now().isoformat(),
                     "updated_at": datetime.now().isoformat()
                 }
@@ -540,8 +725,12 @@ async def create_message(request: Request, user=Depends(verify_auth)):
                 # 스레드의 전체 대화 내역 조회 (새로 추가된 사용자 메시지 포함)
                 chat_history = memory_store["chat_messages"].get(thread_id, [])
                 
+                # 스레드에서 사이트 코드 가져오기
+                thread = memory_store["chat_threads"].get(thread_id)
+                site_code = thread.get("site_id", "default") if thread else "default"
+                
                 # AI 응답 생성
-                ai_response = await generate_gemini_response(chat_history)
+                ai_response = await generate_gemini_response(chat_history, user.id, site_code)
                 
                 # AI 응답 저장 (동시성 보호)
                 with memory_lock:
