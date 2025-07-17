@@ -1,0 +1,146 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME_MAIN: ${{ github.repository }}/main-server
+  IMAGE_NAME_MCP: ${{ github.repository }}/mcp-server
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+    
+    - name: Install uv
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+    
+    - name: Install dependencies
+      run: |
+        uv sync
+    
+    - name: Run tests
+      run: |
+        # 테스트가 있다면 여기서 실행
+        echo "No tests configured yet"
+    
+    - name: Lint check
+      run: |
+        # 린터가 있다면 여기서 실행
+        echo "No linter configured yet"
+
+  build-and-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata for main server
+      id: meta-main
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_MAIN }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Extract metadata for MCP server
+      id: meta-mcp
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_MCP }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push main server image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.main
+        push: true
+        tags: ${{ steps.meta-main.outputs.tags }}
+        labels: ${{ steps.meta-main.outputs.labels }}
+    
+    - name: Build and push MCP server image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.mcp
+        push: true
+        tags: ${{ steps.meta-mcp.outputs.tags }}
+        labels: ${{ steps.meta-mcp.outputs.labels }}
+    
+    - name: Deploy to EC2
+      if: github.ref == 'refs/heads/main'
+      run: |
+        # SSH 키 설정
+        echo "${{ secrets.EC2_SSH_KEY }}" > private_key.pem
+        chmod 600 private_key.pem
+        
+        # EC2 인스턴스에 배포
+        ssh -o StrictHostKeyChecking=no -i private_key.pem ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          # GitHub Container Registry 로그인
+          echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          
+          # 기존 컨테이너 중지 및 제거
+          docker-compose -f docker-compose.yml down || true
+          
+          # 최신 이미지 pull
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_MAIN }}:latest
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_MCP }}:latest
+          
+          # docker-compose.yml 업데이트 (GitHub에서 가져오기)
+          curl -o docker-compose.yml https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose.yml
+          
+          # 환경 변수 설정
+          cat > .env << EOL
+          SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          EOL
+          
+          # 새 컨테이너 시작
+          docker-compose up -d
+          
+          # 헬스체크
+          sleep 30
+          curl -f http://localhost:8000/health || exit 1
+          
+          echo "배포 완료!"
+        EOF
+        
+        # SSH 키 제거
+        rm private_key.pem
