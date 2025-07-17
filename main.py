@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
     global mcp_client
     try:
         
-        mcp_client = Client("http://localhost:8001")
+        mcp_client = Client("http://mcp-server:8001")
         await mcp_client.__aenter__()
         print("MCP 클라이언트 연결 성공")
 
