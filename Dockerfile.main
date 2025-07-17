@@ -12,7 +12,7 @@ COPY pyproject.toml uv.lock ./
 
 # uv 설치 및 의존성 설치
 RUN pip install uv
-RUN uv install --frozen
+RUN uv sync --frozen
 
 # 애플리케이션 코드 복사
 COPY main.py .
