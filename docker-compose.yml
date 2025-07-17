@@ -5,7 +5,7 @@ services:
     image: ghcr.io/${GITHUB_REPOSITORY}/main-server:latest
     container_name: imweb-main-server
     ports:
-      - "8000:8000"
+      - "8080:8000"
     environment:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
