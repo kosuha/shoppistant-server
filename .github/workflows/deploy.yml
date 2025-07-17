@@ -129,6 +129,10 @@ jobs:
           echo "SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}" >> .env
           echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
           echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+          echo "IMWEB_CLIENT_ID=${{ secrets.IMWEB_CLIENT_ID }}" >> .env
+          echo "IMWEB_CLIENT_SECRET=${{ secrets.IMWEB_CLIENT_SECRET }}" >> .env
+          echo "IMWEB_REDIRECT_URI=${{ secrets.IMWEB_REDIRECT_URI }}" >> .env
+          echo "IMWEB_BASE_URL=${{ secrets.IMWEB_BASE_URL }}" >> .env
           echo "GITHUB_REPOSITORY=${{ github.repository }}" >> .env
           
           # 새 컨테이너 시작
