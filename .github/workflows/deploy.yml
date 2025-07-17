@@ -140,7 +140,7 @@ jobs:
           
           # 헬스체크
           sleep 30
-          curl -f http://localhost:8000/health || exit 1
+          curl -f http://localhost:8080/health || exit 1
           
           echo "배포 완료!"
         EOF
