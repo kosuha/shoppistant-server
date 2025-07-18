@@ -4,6 +4,7 @@ services:
   main-server:
     image: ghcr.io/${GITHUB_REPOSITORY}/main-server:latest
     container_name: imweb-main-server
+    pull_policy: always
     ports:
       - "80:8000"
     environment:
