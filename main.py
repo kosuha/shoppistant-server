@@ -14,9 +14,15 @@ import threading
 from fastmcp import Client
 from contextlib import asynccontextmanager
 import requests
+import logging
+from database_helper import DatabaseHelper
 
 # MCP 클라이언트 전역 변수
 mcp_client = None
+
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -34,6 +40,9 @@ if not SUPABASE_URL or not SUPABASE_ANON_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
+# 데이터베이스 헬퍼 초기화
+db_helper = DatabaseHelper(supabase)
+
 # Gemini API 설정
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
@@ -45,27 +54,54 @@ security = HTTPBearer()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 시작 시 MCP 클라이언트 초기화
-    global mcp_client
+    # 시작 시 MCP 클라이언트 및 데이터베이스 초기화
+    global mcp_client, db_connected
+    
+    # 데이터베이스 연결 상태 확인
     try:
-        
+        health_status = await db_helper.health_check()
+        db_connected = health_status.get('connected', False)
+        if db_connected:
+            logger.info("데이터베이스 연결 성공")
+            # 시스템 시작 로그 기록
+            await db_helper.log_system_event(
+                event_type='server_start',
+                event_data={'status': 'success', 'timestamp': datetime.now().isoformat()}
+            )
+        else:
+            logger.error("데이터베이스 연결 실패")
+    except Exception as e:
+        logger.error(f"데이터베이스 초기화 실패: {e}")
+        db_connected = False
+    
+    # MCP 클라이언트 초기화
+    try:
         mcp_client = Client("http://mcp-server:8001")
         await mcp_client.__aenter__()
-        print("MCP 클라이언트 연결 성공")
-
+        logger.info("MCP 클라이언트 연결 성공")
     except Exception as e:
-        print(f"MCP 클라이언트 연결 실패 (일반 모드로 계속): {e}")
+        logger.warning(f"MCP 클라이언트 연결 실패 (일반 모드로 계속): {e}")
         mcp_client = None
     
     yield
     
-    # 종료 시 MCP 클라이언트 정리
+    # 종료 시 정리
     if mcp_client:
         try:
             await mcp_client.__aexit__(None, None, None)
-            print("MCP 클라이언트 연결 종료")
+            logger.info("MCP 클라이언트 연결 종료")
         except Exception as e:
-            print(f"MCP 클라이언트 종료 실패: {e}")
+            logger.error(f"MCP 클라이언트 종료 실패: {e}")
+    
+    # 시스템 종료 로그 기록
+    if db_connected:
+        try:
+            await db_helper.log_system_event(
+                event_type='server_stop',
+                event_data={'status': 'success', 'timestamp': datetime.now().isoformat()}
+            )
+        except Exception as e:
+            logger.error(f"종료 로그 기록 실패: {e}")
 
 app = FastAPI(
     title="Imweb AI Agent Server", 
@@ -83,15 +119,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 임시 메모리 저장소
-memory_store = {
-    "user_sites": {},  # user_id -> List[site_data]
-    "chat_threads": {},  # thread_id -> thread_data
-    "chat_messages": {}  # thread_id -> List[message_data]
-}
-
-# 동시성 보호를 위한 락
-memory_lock = threading.Lock()
+# 데이터베이스 연결 상태 확인을 위한 변수
+db_connected = False
 
 # Supabase Auth 미들웨어
 async def verify_auth(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -206,10 +235,9 @@ async def generate_gemini_response(chat_history, user_id, site_code):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI 응답 생성 실패: {str(e)}")
 
-def get_user_token_from_db(user_id: str, site_code: str) -> str:
+async def get_user_token_from_db(user_id: str, site_code: str) -> str:
     """
     데이터베이스에서 사용자의 아임웹 API 토큰을 조회합니다.
-    현재는 메모리 저장소를 사용하지만, 실제로는 데이터베이스를 사용해야 합니다.
     
     Args:
         user_id: 사용자 ID
@@ -218,18 +246,20 @@ def get_user_token_from_db(user_id: str, site_code: str) -> str:
     Returns:
         str: 아임웹 API 토큰 또는 None
     """
-    # 실제 구현에서는 데이터베이스에서 조회
-    # 현재는 메모리 저장소에서 조회
-    user_sites = memory_store["user_sites"].get(user_id, [])
-    for site in user_sites:
-        if site.get("site_code") == site_code:
-            return site.get("access_token")
-    
-    # 개발용 기본 토큰 (실제로는 제거해야 함)
-    if site_code == "default":
-        return "test-access-token"
-    
-    return None
+    try:
+        # 데이터베이스에서 토큰 조회
+        token = await db_helper.get_user_token_by_site_code(user_id, site_code)
+        if token:
+            return token
+        
+        # 개발용 기본 토큰 (실제로는 제거해야 함)
+        if site_code == "default":
+            return "test-access-token"
+        
+        return None
+    except Exception as e:
+        logger.error(f"토큰 조회 실패: {e}")
+        return None
 
 @app.post("/api/v1/tokens")
 async def set_access_token(request: Request, user=Depends(verify_auth)):
@@ -256,40 +286,37 @@ async def set_access_token(request: Request, user=Depends(verify_auth)):
         if not site_code or not access_token:
             raise HTTPException(status_code=400, detail="사이트 코드와 액세스 토큰이 필요합니다.")
         
-        # 사용자별 토큰 저장
-        with memory_lock:
-            user_sites = memory_store["user_sites"].get(user.id, [])
-            site_found = False
-            
-            for site in user_sites:
-                if site["site_code"] == site_code:
-                    site["access_token"] = access_token
-                    site["updated_at"] = datetime.now().isoformat()
-                    site_found = True
-                    break
-            
-            if not site_found:
-                # 새로운 사이트 추가
-                site_data = {
-                    "id": str(uuid.uuid4()),
-                    "user_id": user.id,
-                    "site_code": site_code,
-                    "access_token": access_token,
-                    "created_at": datetime.now().isoformat(),
-                    "updated_at": datetime.now().isoformat()
-                }
-                
-                if user.id not in memory_store["user_sites"]:
-                    memory_store["user_sites"][user.id] = []
-                memory_store["user_sites"][user.id].append(site_data)
+        # 기존 사이트 확인
+        existing_site = await db_helper.get_user_site_by_code(user.id, site_code)
         
-        print(f"사용자 {user.id}의 사이트 {site_code}에 액세스 토큰 저장됨")
+        if existing_site:
+            # 기존 사이트의 토큰 업데이트
+            success = await db_helper.update_user_site_tokens(user.id, site_code, access_token)
+            if not success:
+                raise HTTPException(status_code=500, detail="토큰 업데이트에 실패했습니다.")
+        else:
+            # 새로운 사이트 생성
+            site_data = await db_helper.create_user_site(user.id, site_code, access_token=access_token)
+            if not site_data:
+                raise HTTPException(status_code=500, detail="사이트 생성에 실패했습니다.")
+        
+        # 로그 기록
+        await db_helper.log_system_event(
+            user_id=user.id,
+            event_type='token_set',
+            event_data={'site_code': site_code, 'action': 'manual_set'}
+        )
+        
+        logger.info(f"사용자 {user.id}의 사이트 {site_code}에 액세스 토큰 저장됨")
         return JSONResponse(status_code=200, content={
             "status": "success",
             "message": "액세스 토큰이 저장되었습니다."
         })
         
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"토큰 설정 실패: {e}")
         return JSONResponse(status_code=500, content={
             "status": "error",
             "message": str(e)
@@ -301,7 +328,23 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    try:
+        # 데이터베이스 상태 확인
+        db_health = await db_helper.health_check()
+        
+        return {
+            "status": "healthy",
+            "database": db_health,
+            "mcp_client": "connected" if mcp_client else "disconnected",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"헬스 체크 실패: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 @app.get("/api/v1/status")
 async def api_status():
@@ -350,32 +393,32 @@ async def api_imweb_site_code(request: Request, user=Depends(verify_auth)):
         if not site_code:
             raise HTTPException(status_code=400, detail="사이트 코드가 필요합니다.")
 
-        # 메모리에 사용자 사이트 코드 저장
+        # 데이터베이스에 사용자 사이트 코드 저장
         try:
-            if user.id not in memory_store["user_sites"]:
-                memory_store["user_sites"][user.id] = []
-            
-            # 기존 사이트 코드가 있는지 확인
-            existing_sites = memory_store["user_sites"][user.id]
-            existing_site = next((site for site in existing_sites if site["site_code"] == site_code), None)
+            # 기존 사이트가 있는지 확인
+            existing_site = await db_helper.get_user_site_by_code(user.id, site_code)
             
             if existing_site:
-                # 이미 존재하는 경우 업데이트
-                existing_site["updated_at"] = datetime.now().isoformat()
+                # 이미 존재하는 경우 - 별도 업데이트 불필요 (자동으로 updated_at 갱신됨)
+                logger.info(f"사용자 {user.id}의 기존 사이트 {site_code} 확인됨")
             else:
                 # 새로운 사이트 코드 저장
-                site_data = {
-                    "id": str(uuid.uuid4()),
-                    "user_id": user.id,
-                    "site_code": site_code,
-                    "access_token": None,  # 나중에 별도 API로 설정
-                    "created_at": datetime.now().isoformat(),
-                    "updated_at": datetime.now().isoformat()
-                }
-                memory_store["user_sites"][user.id].append(site_data)
+                site_data = await db_helper.create_user_site(user.id, site_code)
+                if not site_data:
+                    raise HTTPException(status_code=500, detail="사이트 생성에 실패했습니다.")
+                
+                # 로그 기록
+                await db_helper.log_system_event(
+                    user_id=user.id,
+                    event_type='site_connected',
+                    event_data={'site_code': site_code}
+                )
 
+        except HTTPException:
+            raise
         except Exception as store_error:
-            raise HTTPException(status_code=500, detail=f"메모리 저장 실패: {str(store_error)}")
+            logger.error(f"사이트 저장 실패: {store_error}")
+            raise HTTPException(status_code=500, detail=f"사이트 저장 실패: {str(store_error)}")
         
         print(f"사용자 {user.id}의 사이트 코드 {site_code} 저장됨")
         return JSONResponse(status_code=200, content={
@@ -427,32 +470,34 @@ async def auth_code(request: Request, user=Depends(verify_auth)):
         if not access_token or not refresh_token:
             raise HTTPException(status_code=500, detail="토큰 발급에 실패했습니다.")
         
-        # 메모리에 사용자 사이트 정보 저장
-        with memory_lock:
-            user_sites = memory_store["user_sites"].get(user.id, [])
-            site_found = False
+        # 데이터베이스에 사용자 사이트 정보 저장
+        try:
+            # 기존 사이트가 있는지 확인
+            existing_site = await db_helper.get_user_site_by_code(user.id, site_code)
             
-            for site in user_sites:
-                if site["site_code"] == site_code:
-                    site["access_token"] = access_token
-                    site["refresh_token"] = refresh_token
-                    site["updated_at"] = datetime.now().isoformat()
-                    site_found = True
-                    break
-            
-            if not site_found:
+            if existing_site:
+                # 기존 사이트의 토큰 업데이트
+                success = await db_helper.update_user_site_tokens(user.id, site_code, access_token, refresh_token)
+                if not success:
+                    raise HTTPException(status_code=500, detail="토큰 업데이트에 실패했습니다.")
+            else:
                 # 새로운 사이트 정보 추가
-                site_data = {
-                    "id": str(uuid.uuid4()),
-                    "user_id": user.id,
-                    "site_code": site_code,
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                    "created_at": datetime.now().isoformat(),
-                    "updated_at": datetime.now().isoformat()
-                }
-                user_sites.append(site_data)
-                memory_store["user_sites"][user.id] = user_sites
+                site_data = await db_helper.create_user_site(user.id, site_code, access_token=access_token, refresh_token=refresh_token)
+                if not site_data:
+                    raise HTTPException(status_code=500, detail="사이트 생성에 실패했습니다.")
+            
+            # 로그 기록
+            await db_helper.log_system_event(
+                user_id=user.id,
+                event_type='oauth_token_received',
+                event_data={'site_code': site_code, 'source': 'oauth_flow'}
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as db_error:
+            logger.error(f"데이터베이스 저장 실패: {db_error}")
+            raise HTTPException(status_code=500, detail="데이터베이스 저장에 실패했습니다.")
         
         # 아임웹에 연동 완료 요청
         response = requests.patch(
@@ -506,16 +551,28 @@ async def get_user_sites(user=Depends(verify_auth)):
     }
     """
     try:
-        user_sites = memory_store["user_sites"].get(user.id, [])
-        # 생성일시 역순으로 정렬
-        sorted_sites = sorted(user_sites, key=lambda x: x["created_at"], reverse=True)
+        user_sites = await db_helper.get_user_sites(user.id)
+        
+        # 민감한 정보 제거 (토큰 정보 숨김)
+        safe_sites = []
+        for site in user_sites:
+            safe_site = {
+                "id": site.get("id"),
+                "site_code": site.get("site_code"),
+                "site_name": site.get("site_name"),
+                "created_at": site.get("created_at"),
+                "updated_at": site.get("updated_at"),
+                "token_configured": bool(site.get("access_token"))
+            }
+            safe_sites.append(safe_site)
         
         return JSONResponse(status_code=200, content={
-            "sites": sorted_sites,
+            "sites": safe_sites,
             "status": "success"
         })
         
     except Exception as e:
+        logger.error(f"사용자 사이트 조회 실패: {e}")
         return JSONResponse(status_code=500, content={
             "status": "error",
             "message": str(e)
@@ -533,6 +590,7 @@ async def get_threads(user=Depends(verify_auth)):
                 "id": "스레드 ID",
                 "user_id": "사용자 ID",
                 "site_id": "사이트 ID",
+                "title": "스레드 제목",
                 "created_at": "생성일시",
                 "updated_at": "수정일시",
                 "last_message_at": "마지막 메시지 시간"
@@ -548,17 +606,15 @@ async def get_threads(user=Depends(verify_auth)):
     }
     """
     try:
-        # 사용자의 스레드만 필터링
-        user_threads = [thread for thread in memory_store["chat_threads"].values() if thread["user_id"] == user.id]
-        # 생성일시 역순으로 정렬
-        sorted_threads = sorted(user_threads, key=lambda x: x["created_at"], reverse=True)
+        user_threads = await db_helper.get_user_threads(user.id)
 
         return JSONResponse(status_code=200, content={
-            "threads": sorted_threads,
+            "threads": user_threads,
             "status": "success"
         })
         
     except Exception as e:
+        logger.error(f"스레드 조회 실패: {e}")
         return JSONResponse(status_code=500, content={
             "status": "error",
             "message": str(e)
@@ -578,6 +634,7 @@ async def get_thread(thread_id: str, user=Depends(verify_auth)):
             "id": "스레드 ID",
             "user_id": "사용자 ID",
             "site_id": "사이트 ID",
+            "title": "스레드 제목",
             "created_at": "생성일시",
             "updated_at": "수정일시",
             "last_message_at": "마지막 메시지 시간"
@@ -592,9 +649,9 @@ async def get_thread(thread_id: str, user=Depends(verify_auth)):
     }
     """
     try:
-        thread = memory_store["chat_threads"].get(thread_id)
+        thread = await db_helper.get_thread_by_id(user.id, thread_id)
         
-        if not thread or thread["user_id"] != user.id:
+        if not thread:
             raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다.")
         
         return JSONResponse(status_code=200, content={
@@ -605,6 +662,7 @@ async def get_thread(thread_id: str, user=Depends(verify_auth)):
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"스레드 조회 실패: {e}")
         return JSONResponse(status_code=500, content={
             "status": "error",
             "message": str(e)
@@ -632,17 +690,23 @@ async def delete_thread(thread_id: str, user=Depends(verify_auth)):
     """
     try:
         # 먼저 스레드가 존재하고 사용자 소유인지 확인
-        thread = memory_store["chat_threads"].get(thread_id)
+        thread = await db_helper.get_thread_by_id(user.id, thread_id)
         
-        if not thread or thread["user_id"] != user.id:
+        if not thread:
             raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다.")
         
-        # 스레드 삭제
-        del memory_store["chat_threads"][thread_id]
+        # 스레드 삭제 (관련 메시지들도 CASCADE로 자동 삭제됨)
+        success = await db_helper.delete_thread(user.id, thread_id)
         
-        # 해당 스레드의 메시지들도 삭제
-        if thread_id in memory_store["chat_messages"]:
-            del memory_store["chat_messages"][thread_id]
+        if not success:
+            raise HTTPException(status_code=500, detail="스레드 삭제에 실패했습니다.")
+        
+        # 로그 기록
+        await db_helper.log_system_event(
+            user_id=user.id,
+            event_type='thread_deleted',
+            event_data={'thread_id': thread_id}
+        )
         
         return JSONResponse(status_code=200, content={
             "status": "success",
@@ -652,6 +716,7 @@ async def delete_thread(thread_id: str, user=Depends(verify_auth)):
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"스레드 삭제 실패: {e}")
         return JSONResponse(status_code=500, content={
             "status": "error",
             "message": str(e)
@@ -689,23 +754,22 @@ async def get_messages(thread_id: str, user=Depends(verify_auth)):
     """
     try:
         # 먼저 스레드가 존재하고 사용자 소유인지 확인
-        thread = memory_store["chat_threads"].get(thread_id)
-        if not thread or thread["user_id"] != user.id:
+        thread = await db_helper.get_thread_by_id(user.id, thread_id)
+        if not thread:
             raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다.")
         
         # 메시지 조회
-        messages = memory_store["chat_messages"].get(thread_id, [])
-        # 생성일시순으로 정렬
-        sorted_messages = sorted(messages, key=lambda x: x["created_at"])
+        messages = await db_helper.get_thread_messages(thread_id, user.id)
         
         return JSONResponse(status_code=200, content={
-            "messages": sorted_messages,
+            "messages": messages,
             "status": "success"
         })
         
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"메시지 조회 실패: {e}")
         return JSONResponse(status_code=500, content={
             "status": "error",
             "message": str(e)
@@ -767,92 +831,76 @@ async def create_message(request: Request, user=Depends(verify_auth)):
             raise HTTPException(status_code=400, detail="메시지 내용이 필요합니다.")
 
         # 스레드가 존재하고 사용자 소유인지 확인
-        thread = memory_store["chat_threads"].get(thread_id)
-        if not thread or thread["user_id"] != user.id:
+        thread = await db_helper.get_thread_by_id(user.id, thread_id)
+        if not thread:
             raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다.")
 
-        # 1. 사용자 메시지 저장 (동시성 보호 및 중복 검사)
+        # 1. 중복 메시지 검사
+        if message_type == "user":
+            is_duplicate = await db_helper.check_duplicate_message(thread_id, user.id, message, message_type)
+            if is_duplicate:
+                raise HTTPException(status_code=409, detail="중복 메시지입니다. 잠시 후 다시 시도해주세요.")
+
+        # 2. 사용자 메시지 저장
         try:
-            with memory_lock:
-                # 중복 메시지 검사 (최근 5개 메시지 중 동일한 메시지가 있는지 확인)
-                existing_messages = memory_store["chat_messages"].get(thread_id, [])
-                recent_messages = existing_messages[-5:] if len(existing_messages) > 5 else existing_messages
-                
-                # 같은 사용자가 같은 메시지를 최근에 보냈는지 확인 (1초 이내)
-                current_time = datetime.now()
-                for existing_msg in recent_messages:
-                    if (existing_msg["message"] == message and 
-                        existing_msg["message_type"] == message_type and 
-                        existing_msg["user_id"] == user.id):
-                        # 시간 차이 확인 (1초 이내면 중복으로 간주)
-                        existing_time = datetime.fromisoformat(existing_msg["created_at"])
-                        time_diff = (current_time - existing_time).total_seconds()
-                        if time_diff < 1.0:
-                            raise HTTPException(status_code=409, detail="중복 메시지입니다. 잠시 후 다시 시도해주세요.")
-                
-                user_message_id = str(uuid.uuid4())
-                user_message = {
-                    "id": user_message_id,
-                    "thread_id": thread_id,
-                    "user_id": user.id,
-                    "message": message,
-                    "message_type": message_type,
-                    "created_at": current_time.isoformat()
-                }
-                
-                if metadata:
-                    user_message["metadata"] = metadata
-                
-                # 스레드의 메시지 리스트에 추가
-                if thread_id not in memory_store["chat_messages"]:
-                    memory_store["chat_messages"][thread_id] = []
-                memory_store["chat_messages"][thread_id].append(user_message)
+            user_message = await db_helper.create_message(
+                thread_id=thread_id,
+                user_id=user.id,
+                message=message,
+                message_type=message_type,
+                metadata=metadata
+            )
+            
+            if not user_message:
+                raise HTTPException(status_code=500, detail="메시지 저장에 실패했습니다.")
                 
         except HTTPException:
             raise
         except Exception as store_error:
+            logger.error(f"메시지 저장 실패: {store_error}")
             raise HTTPException(status_code=500, detail=f"사용자 메시지 저장 실패: {str(store_error)}")
 
-        # 2. AI 응답 생성 (user 메시지 타입인 경우에만)
+        # 3. AI 응답 생성 (user 메시지 타입인 경우에만)
         ai_message = None
         if message_type == "user":
             try:
                 # 스레드의 전체 대화 내역 조회 (새로 추가된 사용자 메시지 포함)
-                chat_history = memory_store["chat_messages"].get(thread_id, [])
+                chat_history = await db_helper.get_thread_messages(thread_id, user.id)
                 
                 # 스레드에서 사이트 코드 가져오기
-                thread = memory_store["chat_threads"].get(thread_id)
                 site_code = thread.get("site_id", "default") if thread else "default"
                 
                 # AI 응답 생성
                 ai_response = await generate_gemini_response(chat_history, user.id, site_code)
                 
-                # AI 응답 저장 (동시성 보호)
-                with memory_lock:
-                    ai_message_id = str(uuid.uuid4())
-                    ai_message = {
-                        "id": ai_message_id,
-                        "thread_id": thread_id,
-                        "user_id": user.id,
-                        "message": ai_response,
-                        "message_type": "assistant",
-                        "created_at": datetime.now().isoformat()
-                    }
-                    
-                    memory_store["chat_messages"][thread_id].append(ai_message)
+                # AI 응답 저장
+                ai_message = await db_helper.create_message(
+                    thread_id=thread_id,
+                    user_id=user.id,
+                    message=ai_response,
+                    message_type="assistant"
+                )
+                
+                if not ai_message:
+                    logger.warning("AI 응답 저장에 실패했습니다.")
                     
             except Exception as ai_error:
                 # AI 응답 생성 실패는 에러를 던지지 않고 로그만 남김
-                print(f"AI 응답 생성 실패: {str(ai_error)}")
+                logger.error(f"AI 응답 생성 실패: {str(ai_error)}")
 
-        # 3. 스레드의 last_message_at 업데이트 (동시성 보호)
+        # 4. 로그 기록
         try:
-            with memory_lock:
-                current_time = datetime.now().isoformat()
-                memory_store["chat_threads"][thread_id]["last_message_at"] = current_time
-                memory_store["chat_threads"][thread_id]["updated_at"] = current_time
-        except Exception as update_error:
-            print(f"스레드 업데이트 실패: {str(update_error)}")
+            await db_helper.log_system_event(
+                user_id=user.id,
+                event_type='message_created',
+                event_data={
+                    'thread_id': thread_id,
+                    'message_type': message_type,
+                    'has_ai_response': bool(ai_message)
+                }
+            )
+        except Exception as log_error:
+            logger.error(f"로그 기록 실패: {str(log_error)}")
 
         # 응답 구성
         response_data = {
@@ -907,32 +955,32 @@ async def create_thread(request: Request, user=Depends(verify_auth)):
             
         # 사용자가 해당 사이트에 접근 권한이 있는지 확인 (default는 항상 허용)
         if site_id != "default":
-            user_sites = memory_store["user_sites"].get(user.id, [])
+            user_sites = await db_helper.get_user_sites(user.id)
             site_exists = any(site["id"] == site_id for site in user_sites)
             if not site_exists:
-                raise HTTPException(status_code=403, detail=f"해당 사이트에 접근 권한이 없습니다. 사용자 사이트: {user_sites}")
+                raise HTTPException(status_code=403, detail=f"해당 사이트에 접근 권한이 없습니다.")
 
-        # 새 스레드를 메모리에 생성 (동시성 보호)
+        # 새 스레드를 데이터베이스에 생성
         try:
-            with memory_lock:
-                thread_id = str(uuid.uuid4())
-                current_time = datetime.now().isoformat()
-                
-                thread_data = {
-                    "id": thread_id,
-                    "user_id": user.id,
-                    "site_id": site_id,
-                    "created_at": current_time,
-                    "updated_at": current_time,
-                    "last_message_at": None  # 아직 메시지가 없으므로 None
-                }
-                
-                memory_store["chat_threads"][thread_id] = thread_data
-                # 메시지 리스트는 첫 메시지가 올 때 초기화
-                memory_store["chat_messages"][thread_id] = []
+            thread_data = await db_helper.create_chat_thread(user.id, site_id)
             
+            if not thread_data:
+                raise HTTPException(status_code=500, detail="스레드 생성에 실패했습니다.")
+            
+            thread_id = thread_data.get("id")
+            
+            # 로그 기록
+            await db_helper.log_system_event(
+                user_id=user.id,
+                event_type='thread_created',
+                event_data={'thread_id': thread_id, 'site_id': site_id}
+            )
+            
+        except HTTPException:
+            raise
         except Exception as store_error:
-            raise HTTPException(status_code=500, detail=f"메모리 저장 실패: {str(store_error)}")
+            logger.error(f"스레드 생성 실패: {store_error}")
+            raise HTTPException(status_code=500, detail=f"데이터베이스 저장 실패: {str(store_error)}")
 
         return JSONResponse(status_code=201, content={
             "threadId": thread_id,
