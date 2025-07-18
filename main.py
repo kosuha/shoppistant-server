@@ -45,6 +45,9 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 supabase_admin = None
 if SUPABASE_SERVICE_ROLE_KEY:
     supabase_admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    logger.info("Supabase 관리자 클라이언트 생성됨")
+else:
+    logger.warning("SUPABASE_SERVICE_ROLE_KEY가 설정되지 않음")
 
 # 데이터베이스 헬퍼 초기화
 db_helper = DatabaseHelper(supabase, supabase_admin)

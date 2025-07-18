@@ -241,7 +241,12 @@ class DatabaseHelper:
     async def health_check(self) -> Dict[str, Any]:
         """데이터베이스 연결 상태 확인"""
         try:
-            # system_stats 테이블로 헬스체크 (admin_client 사용)
+            # admin_client가 있는지 확인
+            if not self.admin_client:
+                logger.error("admin_client가 None입니다")
+                raise Exception("admin_client not available")
+            
+            # system_stats 테이블로 헬스체크
             result = self.admin_client.table('system_stats').select('count').eq('stat_name', 'health_check').execute()
             return {
                 'status': 'healthy',
