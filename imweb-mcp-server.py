@@ -60,6 +60,7 @@ async def get_site_info(session_id: str, ctx: Context) -> Dict[str, Any]:
     try:
         global _session_tokens
         session_data = _session_tokens.get(session_id)
+        print(f"세션 데이터: {session_data}")
         
         if not session_data:
             await ctx.error("세션이 존재하지 않습니다.")
@@ -77,6 +78,7 @@ async def get_site_info(session_id: str, ctx: Context) -> Dict[str, Any]:
         )
         if response.status_code != 200:
             await ctx.error(f"API 호출 실패: {response.status_code} - {response.text}")
+            print(f"API 호출 실패: {response.status_code} - {response.text}")
             return {"error": f"API 호출 실패: {response.status_code}"}
         
         response_data = response.json()

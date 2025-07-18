@@ -461,11 +461,14 @@ async def auth_code(request: Request, user=Depends(verify_auth)):
                 "Authorization": f"Bearer {access_token}"
             }
         )
-        if response.json().get("statusCode") != 200 or response.json().get("statusCode") != 404:
+        print(f"사용자 {user.id}의 사이트 {site_code}에 액세스 토큰 저장됨.")
+
+        if response.json().get("statusCode") != 200:
+            if response.json().get("statusCode") == 404:
+                raise HTTPException(status_code=404, detail="이미 연동된 사이트입니다.")
             print(f"아임웹 연동 완료 요청 실패: {response.json()}")
             raise HTTPException(status_code=500, detail="아임웹 연동 완료 요청 실패")
         
-        print(f"사용자 {user.id}의 사이트 {site_code}에 액세스 토큰 저장됨.")
         return JSONResponse(status_code=200, content={
             "status": "success",
             "message": "토큰이 성공적으로 발급되었습니다."
