@@ -12,14 +12,18 @@ from datetime import datetime
 import uuid
 import threading
 from fastmcp import Client
-import jwt
-import asyncio
 from contextlib import asynccontextmanager
+import requests
 
 # MCP 클라이언트 전역 변수
 mcp_client = None
 
 load_dotenv()
+
+# imweb 설정
+IMWEB_CLIENT_ID = os.getenv("IMWEB_CLIENT_ID")
+IMWEB_CLIENT_SECRET = os.getenv("IMWEB_CLIENT_SECRET")
+IMWEB_REDIRECT_URI = os.getenv("IMWEB_REDIRECT_URI")
 
 # Supabase 설정
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -367,7 +371,18 @@ async def api_imweb_site_code(request: Request, user=Depends(verify_auth)):
                     "updated_at": datetime.now().isoformat()
                 }
                 memory_store["user_sites"][user.id].append(site_data)
-                
+            
+            # 아임웹에 연동 완료 요청
+            response = requests.patch(
+                "https://openapi.imweb.me/site-info/integration-complete",
+                headers={
+                    "Authorization": f"Bearer {IMWEB_CLIENT_SECRET}"
+                }
+            )
+            if response.json().get("statusCode") != 200:
+                print(f"아임웹 연동 완료 요청 실패: {response.json()}")
+                raise HTTPException(status_code=500, detail="아임웹 연동 완료 요청 실패")
+
         except Exception as store_error:
             raise HTTPException(status_code=500, detail=f"메모리 저장 실패: {str(store_error)}")
         
@@ -377,6 +392,81 @@ async def api_imweb_site_code(request: Request, user=Depends(verify_auth)):
             "message": "사이트 코드가 성공적으로 처리되었습니다.",
             "site_code": site_code
         })
+    except Exception as e:
+        return JSONResponse(status_code=500, content={
+            "status": "error",
+            "message": str(e)
+        })
+
+@app.post("/api/v1/auth-code")
+async def auth_code(request: Request, user=Depends(verify_auth)):
+    request_data = await request.json()
+    auth_code = request_data.get("auth_code")
+    site_code = request_data.get("site_code")
+
+    if not auth_code or not site_code:
+        raise HTTPException(status_code=400, detail="인증 코드와 사이트 코드가 필요합니다.")
+    try:
+        # 아임웹에 토큰 발급 요청
+        response = requests.post(
+            "https://openapi.imweb.me/oauth2/token",
+            json={
+                "grantType": "authorization_code",
+                "clientId": IMWEB_CLIENT_ID,
+                "clientSecret": IMWEB_CLIENT_SECRET,
+                "code": auth_code,
+                "redirectUri": IMWEB_REDIRECT_URI,
+            },
+            headers={
+                "Content-Type": "application/json"
+            }
+        )
+        if response.status_code != 200:
+            print(f"아임웹 토큰 발급 요청 실패: {response.json()}")
+            raise HTTPException(status_code=500, detail="아임웹 토큰 발급 요청 실패")
+        response_data = response.json()
+        token_data = response_data.get("data", {})
+        if response_data.get("statusCode") != 200:
+            print(f"아임웹 토큰 발급 실패: {response_data}")
+            raise HTTPException(status_code=500, detail="아임웹 토큰 발급 실패")
+        access_token = token_data.get("accessToken")
+        refresh_token = token_data.get("refreshToken")
+
+        if not access_token or not refresh_token:
+            raise HTTPException(status_code=500, detail="토큰 발급에 실패했습니다.")
+        
+        # 메모리에 사용자 사이트 정보 저장
+        with memory_lock:
+            user_sites = memory_store["user_sites"].get(user.id, [])
+            site_found = False
+            
+            for site in user_sites:
+                if site["site_code"] == site_code:
+                    site["access_token"] = access_token
+                    site["refresh_token"] = refresh_token
+                    site["updated_at"] = datetime.now().isoformat()
+                    site_found = True
+                    break
+            
+            if not site_found:
+                # 새로운 사이트 정보 추가
+                site_data = {
+                    "id": str(uuid.uuid4()),
+                    "user_id": user.id,
+                    "site_code": site_code,
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "created_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now().isoformat()
+                }
+                user_sites.append(site_data)
+                memory_store["user_sites"][user.id] = user_sites
+        
+        return JSONResponse(status_code=200, content={
+            "status": "success",
+            "message": "토큰이 성공적으로 발급되었습니다."
+        })
+
     except Exception as e:
         return JSONResponse(status_code=500, content={
             "status": "error",
@@ -600,8 +690,6 @@ async def get_messages(thread_id: str, user=Depends(verify_auth)):
         messages = memory_store["chat_messages"].get(thread_id, [])
         # 생성일시순으로 정렬
         sorted_messages = sorted(messages, key=lambda x: x["created_at"])
-
-        print(f"DEBUG: Retrieved messages for thread_id={thread_id}: {sorted_messages}")
         
         return JSONResponse(status_code=200, content={
             "messages": sorted_messages,
