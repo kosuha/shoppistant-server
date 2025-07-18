@@ -387,7 +387,7 @@ async def api_imweb_site_code(request: Request, user=Depends(verify_auth)):
         except Exception as store_error:
             raise HTTPException(status_code=500, detail=f"메모리 저장 실패: {str(store_error)}")
         
-
+        print(f"사용자 {user.id}의 사이트 코드 {site_code} 저장됨")
         return JSONResponse(status_code=200, content={
             "status": "success",
             "message": "사이트 코드가 성공적으로 처리되었습니다.",
@@ -463,6 +463,7 @@ async def auth_code(request: Request, user=Depends(verify_auth)):
                 user_sites.append(site_data)
                 memory_store["user_sites"][user.id] = user_sites
         
+        print(f"사용자 {user.id}의 사이트 {site_code}에 액세스 토큰 저장됨.")
         return JSONResponse(status_code=200, content={
             "status": "success",
             "message": "토큰이 성공적으로 발급되었습니다."
