@@ -241,7 +241,8 @@ class DatabaseHelper:
     async def health_check(self) -> Dict[str, Any]:
         """데이터베이스 연결 상태 확인"""
         try:
-            result = self.supabase.table('system_stats').select('count').execute()
+            # 간단한 쿼리로 연결 상태 확인
+            result = self.supabase.rpc('version').execute()
             return {
                 'status': 'healthy',
                 'connected': True,
