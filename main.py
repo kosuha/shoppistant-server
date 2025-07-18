@@ -131,33 +131,46 @@ app.add_middleware(
 # 데이터베이스 연결 상태 확인을 위한 변수
 db_connected = False
 
-# Supabase Auth 미들웨어
+# Supabase Auth 미들웨어 - 인증된 클라이언트도 함께 반환
 async def verify_auth(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    print("인증 시도")
     try:
-        # JWT 토큰 검증
+        logger.info(f"인증 요청")
+        # 1. JWT 토큰으로 사용자 정보 조회
         response = supabase.auth.get_user(credentials.credentials)
         if response.user is None:
             raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.")
         
-        # 사용자별 Supabase 클라이언트 생성 및 토큰 설정
+        logger.info(f"사용자 {response.user.id} 인증됨")
+        
+        # 2. 사용자 JWT 토큰으로 인증된 클라이언트 생성
         user_client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-        # 요청 헤더에 Authorization 토큰 설정
-        user_client.rest_client.headers['Authorization'] = f'Bearer {credentials.credentials}'
+        # 클라이언트에 사용자 JWT 토큰 설정
+        user_client.postgrest.auth(credentials.credentials)
         
-        # 사용자 정보에 클라이언트 추가
-        response.user.supabase_client = user_client
+        # 3. 데이터베이스 헬퍼에 사용자 클라이언트 설정
+        db_helper.set_user_client(response.user.id, user_client)
         
-        # 프로필이 없으면 자동 생성
+        # 4. 프로필 자동 생성/확인 (사용자 토큰으로)
         try:
-            profile = await db_helper.get_user_profile(response.user.id)
-            if not profile:
-                await db_helper.create_user_profile(response.user.id, response.user.email)
+            # 사용자 토큰으로 조회
+            result = user_client.table('user_profiles').select('*').eq('id', response.user.id).execute()
+            if not result.data:
+                # 사용자 토큰으로 생성
+                user_client.table('user_profiles').insert({
+                    'id': response.user.id,
+                    'display_name': response.user.email,
+                    'preferences': {}
+                }).execute()
+                logger.info(f"사용자 {response.user.id} 프로필 생성 완료")
         except Exception as profile_error:
-            logger.warning(f"프로필 생성 실패: {profile_error}")
+            logger.warning(f"프로필 처리 실패: {profile_error}")
         
         return response.user
-    except Exception:
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"인증 실패: {e}")
         raise HTTPException(status_code=401, detail="인증에 실패했습니다.")
 
 
@@ -675,7 +688,7 @@ async def get_thread(thread_id: str, user=Depends(verify_auth)):
     }
     """
     try:
-        thread = await db_helper.get_thread_by_id(user.id, thread_id)
+        thread = await db_helper.get_thread_by_id(user.id, thread_id, user)
         
         if not thread:
             raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다.")
@@ -716,13 +729,13 @@ async def delete_thread(thread_id: str, user=Depends(verify_auth)):
     """
     try:
         # 먼저 스레드가 존재하고 사용자 소유인지 확인
-        thread = await db_helper.get_thread_by_id(user.id, thread_id)
+        thread = await db_helper.get_thread_by_id(user.id, thread_id, user)
         
         if not thread:
             raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다.")
         
         # 스레드 삭제 (관련 메시지들도 CASCADE로 자동 삭제됨)
-        success = await db_helper.delete_thread(user.id, thread_id)
+        success = await db_helper.delete_thread(user.id, thread_id, user)
         
         if not success:
             raise HTTPException(status_code=500, detail="스레드 삭제에 실패했습니다.")
@@ -780,12 +793,12 @@ async def get_messages(thread_id: str, user=Depends(verify_auth)):
     """
     try:
         # 먼저 스레드가 존재하고 사용자 소유인지 확인
-        thread = await db_helper.get_thread_by_id(user.id, thread_id)
+        thread = await db_helper.get_thread_by_id(user.id, thread_id, user)
         if not thread:
             raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다.")
         
         # 메시지 조회
-        messages = await db_helper.get_thread_messages(thread_id, user.id)
+        messages = await db_helper.get_thread_messages(thread_id, user.id, user)
         
         return JSONResponse(status_code=200, content={
             "messages": messages,
@@ -857,13 +870,13 @@ async def create_message(request: Request, user=Depends(verify_auth)):
             raise HTTPException(status_code=400, detail="메시지 내용이 필요합니다.")
 
         # 스레드가 존재하고 사용자 소유인지 확인
-        thread = await db_helper.get_thread_by_id(user.id, thread_id)
+        thread = await db_helper.get_thread_by_id(user.id, thread_id, user)
         if not thread:
             raise HTTPException(status_code=404, detail="스레드를 찾을 수 없습니다.")
 
         # 1. 중복 메시지 검사
         if message_type == "user":
-            is_duplicate = await db_helper.check_duplicate_message(thread_id, user.id, message, message_type)
+            is_duplicate = await db_helper.check_duplicate_message(thread_id, user.id, message, message_type, user=user)
             if is_duplicate:
                 raise HTTPException(status_code=409, detail="중복 메시지입니다. 잠시 후 다시 시도해주세요.")
 
@@ -874,7 +887,8 @@ async def create_message(request: Request, user=Depends(verify_auth)):
                 user_id=user.id,
                 message=message,
                 message_type=message_type,
-                metadata=metadata
+                metadata=metadata,
+                user=user
             )
             
             if not user_message:
@@ -891,7 +905,7 @@ async def create_message(request: Request, user=Depends(verify_auth)):
         if message_type == "user":
             try:
                 # 스레드의 전체 대화 내역 조회 (새로 추가된 사용자 메시지 포함)
-                chat_history = await db_helper.get_thread_messages(thread_id, user.id)
+                chat_history = await db_helper.get_thread_messages(thread_id, user.id, user)
                 
                 # 스레드에서 사이트 코드 가져오기
                 site_code = thread.get("site_id", "default") if thread else "default"
@@ -904,7 +918,8 @@ async def create_message(request: Request, user=Depends(verify_auth)):
                     thread_id=thread_id,
                     user_id=user.id,
                     message=ai_response,
-                    message_type="assistant"
+                    message_type="assistant",
+                    user=user
                 )
                 
                 if not ai_message:
@@ -988,7 +1003,7 @@ async def create_thread(request: Request, user=Depends(verify_auth)):
 
         # 새 스레드를 데이터베이스에 생성
         try:
-            thread_data = await db_helper.create_chat_thread(user.id, site_id)
+            thread_data = await db_helper.create_chat_thread(user.id, site_id, user=user)
             
             if not thread_data:
                 raise HTTPException(status_code=500, detail="스레드 생성에 실패했습니다.")

@@ -14,10 +14,17 @@ class DatabaseHelper:
     def __init__(self, supabase_client: Client, admin_client: Client = None):
         self.supabase = supabase_client
         self.admin_client = admin_client or supabase_client
+        self.user_clients = {}  # 사용자별 클라이언트 저장소
+    
+    def set_user_client(self, user_id: str, client: Client):
+        """사용자별 인증된 클라이언트 설정"""
+        self.user_clients[user_id] = client
     
     def get_user_client(self, user):
         """사용자별 클라이언트 반환, 없으면 기본 클라이언트 사용"""
-        return getattr(user, 'supabase_client', self.supabase)
+        if user and hasattr(user, 'id'):
+            return self.user_clients.get(user.id, self.supabase)
+        return self.supabase
     
     async def create_user_profile(self, user_id: str, display_name: str = None) -> Dict[str, Any]:
         """사용자 프로필 생성"""
@@ -105,7 +112,7 @@ class DatabaseHelper:
             return None
     
     # Chat Threads 관련 함수들
-    async def create_chat_thread(self, user_id: str, site_id: str = None, title: str = None) -> Dict[str, Any]:
+    async def create_chat_thread(self, user_id: str, site_id: str = None, title: str = None, user=None) -> Dict[str, Any]:
         """새로운 채팅 스레드 생성"""
         try:
             thread_data = {
@@ -114,7 +121,8 @@ class DatabaseHelper:
                 'title': title
             }
             
-            result = self.supabase.table('chat_threads').insert(thread_data).execute()
+            client = self.get_user_client(user)
+            result = client.table('chat_threads').insert(thread_data).execute()
             return result.data[0] if result.data else {}
         except Exception as e:
             logger.error(f"채팅 스레드 생성 실패: {e}")
@@ -130,19 +138,21 @@ class DatabaseHelper:
             logger.error(f"사용자 스레드 조회 실패: {e}")
             return []
     
-    async def get_thread_by_id(self, user_id: str, thread_id: str) -> Optional[Dict[str, Any]]:
+    async def get_thread_by_id(self, user_id: str, thread_id: str, user=None) -> Optional[Dict[str, Any]]:
         """스레드 ID로 스레드 조회"""
         try:
-            result = self.supabase.table('chat_threads').select('*').eq('id', thread_id).eq('user_id', user_id).execute()
+            client = self.get_user_client(user)
+            result = client.table('chat_threads').select('*').eq('id', thread_id).eq('user_id', user_id).execute()
             return result.data[0] if result.data else None
         except Exception as e:
             logger.error(f"스레드 조회 실패: {e}")
             return None
     
-    async def delete_thread(self, user_id: str, thread_id: str) -> bool:
+    async def delete_thread(self, user_id: str, thread_id: str, user=None) -> bool:
         """스레드 삭제"""
         try:
-            result = self.supabase.table('chat_threads').delete().eq('id', thread_id).eq('user_id', user_id).execute()
+            client = self.get_user_client(user)
+            result = client.table('chat_threads').delete().eq('id', thread_id).eq('user_id', user_id).execute()
             return len(result.data) > 0
         except Exception as e:
             logger.error(f"스레드 삭제 실패: {e}")
@@ -150,7 +160,7 @@ class DatabaseHelper:
     
     # Chat Messages 관련 함수들
     async def create_message(self, thread_id: str, user_id: str, message: str, 
-                           message_type: str = 'user', metadata: Dict = None) -> Dict[str, Any]:
+                           message_type: str = 'user', metadata: Dict = None, user=None) -> Dict[str, Any]:
         """새로운 메시지 생성"""
         try:
             message_data = {
@@ -161,29 +171,32 @@ class DatabaseHelper:
                 'metadata': metadata or {}
             }
             
-            result = self.supabase.table('chat_messages').insert(message_data).execute()
+            client = self.get_user_client(user)
+            result = client.table('chat_messages').insert(message_data).execute()
             return result.data[0] if result.data else {}
         except Exception as e:
             logger.error(f"메시지 생성 실패: {e}")
             return {}
     
-    async def get_thread_messages(self, thread_id: str, user_id: str) -> List[Dict[str, Any]]:
+    async def get_thread_messages(self, thread_id: str, user_id: str, user=None) -> List[Dict[str, Any]]:
         """스레드의 모든 메시지 조회"""
         try:
-            result = self.supabase.table('chat_messages').select('*').eq('thread_id', thread_id).eq('user_id', user_id).order('created_at', desc=False).execute()
+            client = self.get_user_client(user)
+            result = client.table('chat_messages').select('*').eq('thread_id', thread_id).eq('user_id', user_id).order('created_at', desc=False).execute()
             return result.data or []
         except Exception as e:
             logger.error(f"스레드 메시지 조회 실패: {e}")
             return []
     
     async def check_duplicate_message(self, thread_id: str, user_id: str, message: str, 
-                                    message_type: str = 'user', seconds: int = 1) -> bool:
+                                    message_type: str = 'user', seconds: int = 1, user=None) -> bool:
         """중복 메시지 검사"""
         try:
             # 최근 몇 초 이내에 같은 메시지가 있는지 확인
             cutoff_time = datetime.now().replace(microsecond=0).isoformat()
             
-            result = self.supabase.table('chat_messages').select('created_at').eq('thread_id', thread_id).eq('user_id', user_id).eq('message', message).eq('message_type', message_type).gte('created_at', cutoff_time).execute()
+            client = self.get_user_client(user)
+            result = client.table('chat_messages').select('created_at').eq('thread_id', thread_id).eq('user_id', user_id).eq('message', message).eq('message_type', message_type).gte('created_at', cutoff_time).execute()
             
             return len(result.data) > 0
         except Exception as e:
