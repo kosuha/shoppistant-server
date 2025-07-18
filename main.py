@@ -137,9 +137,10 @@ async def verify_auth(credentials: HTTPAuthorizationCredentials = Depends(securi
         if response.user is None:
             raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.")
         
-        # 사용자별 Supabase 클라이언트 생성 및 세션 설정
+        # 사용자별 Supabase 클라이언트 생성 및 토큰 설정
         user_client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-        user_client.auth.set_session(credentials.credentials, None)
+        # 요청 헤더에 Authorization 토큰 설정
+        user_client.rest_client.headers['Authorization'] = f'Bearer {credentials.credentials}'
         
         # 사용자 정보에 클라이언트 추가
         response.user.supabase_client = user_client
