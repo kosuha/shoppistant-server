@@ -95,6 +95,7 @@ memory_lock = threading.Lock()
 
 # Supabase Auth 미들웨어
 async def verify_auth(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    print("인증 시도")
     try:
         # JWT 토큰 검증
         response = supabase.auth.get_user(credentials.credentials)
@@ -401,6 +402,7 @@ async def api_imweb_site_code(request: Request, user=Depends(verify_auth)):
 
 @app.post("/api/v1/auth-code")
 async def auth_code(request: Request, user=Depends(verify_auth)):
+    print("인증 코드 요청")
     request_data = await request.json()
     auth_code = request_data.get("auth_code")
     site_code = request_data.get("site_code")
