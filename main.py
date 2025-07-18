@@ -144,6 +144,15 @@ async def verify_auth(credentials: HTTPAuthorizationCredentials = Depends(securi
         
         # 사용자 정보에 클라이언트 추가
         response.user.supabase_client = user_client
+        
+        # 프로필이 없으면 자동 생성
+        try:
+            profile = await db_helper.get_user_profile(response.user.id)
+            if not profile:
+                await db_helper.create_user_profile(response.user.id, response.user.email)
+        except Exception as profile_error:
+            logger.warning(f"프로필 생성 실패: {profile_error}")
+        
         return response.user
     except Exception:
         raise HTTPException(status_code=401, detail="인증에 실패했습니다.")
