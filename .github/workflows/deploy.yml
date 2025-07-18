@@ -117,6 +117,12 @@ jobs:
           # 기존 컨테이너 중지 및 제거
           docker-compose -f docker-compose.yml down || true
           
+          # 사용하지 않는 이미지 정리
+          docker image prune -f
+          
+          # 오래된 이미지 삭제 (1주일 이상 된 이미지)
+          docker images --filter "until=168h" --format "{{.ID}}" | xargs -r docker rmi -f || true
+          
           # 최신 이미지 pull
           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_MAIN }}:latest
           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_MCP }}:latest
