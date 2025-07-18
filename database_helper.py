@@ -14,22 +14,21 @@ class DatabaseHelper:
     def __init__(self, supabase_client: Client, admin_client: Client = None):
         self.supabase = supabase_client
         self.admin_client = admin_client or supabase_client
-        self.user_clients = {}  # 사용자별 클라이언트 저장소
     
-    def set_user_client(self, user_id: str, client: Client):
-        """사용자별 인증된 클라이언트 설정"""
-        self.user_clients[user_id] = client
+    def _get_client(self, use_admin: bool = False):
+        """적절한 클라이언트 반환 - 일반적으로 admin client 사용"""
+        return self.admin_client if use_admin or self.admin_client else self.supabase
     
-    def get_user_client(self, user):
-        """사용자별 클라이언트 반환, 없으면 기본 클라이언트 사용"""
-        if user and hasattr(user, 'id'):
-            return self.user_clients.get(user.id, self.supabase)
-        return self.supabase
+    def _verify_user_access(self, user_id: str, resource_user_id: str):
+        """사용자가 리소스에 접근할 권한이 있는지 서버에서 검증"""
+        if user_id != resource_user_id:
+            raise PermissionError(f"사용자 {user_id}는 다른 사용자의 리소스에 접근할 수 없습니다.")
     
     async def create_user_profile(self, user_id: str, display_name: str = None) -> Dict[str, Any]:
         """사용자 프로필 생성"""
         try:
-            result = self.supabase.table('user_profiles').insert({
+            client = self._get_client(use_admin=True)
+            result = client.table('user_profiles').insert({
                 'id': user_id,
                 'display_name': display_name,
                 'preferences': {}
@@ -42,17 +41,21 @@ class DatabaseHelper:
     async def get_user_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
         """사용자 프로필 조회"""
         try:
-            result = self.supabase.table('user_profiles').select('*').eq('id', user_id).execute()
+            client = self._get_client(use_admin=True)
+            result = client.table('user_profiles').select('*').eq('id', user_id).execute()
             return result.data[0] if result.data else None
         except Exception as e:
             logger.error(f"사용자 프로필 조회 실패: {e}")
             return None
     
     # User Sites 관련 함수들
-    async def get_user_sites(self, user_id: str, user=None) -> List[Dict[str, Any]]:
+    async def get_user_sites(self, requesting_user_id: str, user_id: str) -> List[Dict[str, Any]]:
         """사용자의 연결된 사이트 목록 조회"""
         try:
-            client = self.get_user_client(user)
+            # 권한 검증
+            self._verify_user_access(requesting_user_id, user_id)
+            
+            client = self._get_client(use_admin=True)
             result = client.table('user_sites').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
             return result.data or []
         except Exception as e:
@@ -60,7 +63,7 @@ class DatabaseHelper:
             return []
     
     async def create_user_site(self, user_id: str, site_code: str, site_name: str = None, 
-                             access_token: str = None, refresh_token: str = None, user=None) -> Dict[str, Any]:
+                             access_token: str = None, refresh_token: str = None) -> Dict[str, Any]:
         """새로운 사이트 연결 생성"""
         try:
             site_data = {
@@ -71,7 +74,7 @@ class DatabaseHelper:
                 'refresh_token': self._encrypt_token(refresh_token) if refresh_token else None
             }
             
-            client = self.get_user_client(user)
+            client = self._get_client(use_admin=True)
             result = client.table('user_sites').insert(site_data).execute()
             return result.data[0] if result.data else {}
         except Exception as e:
@@ -88,7 +91,8 @@ class DatabaseHelper:
             if refresh_token:
                 update_data['refresh_token'] = self._encrypt_token(refresh_token)
             
-            result = self.supabase.table('user_sites').update(update_data).eq('user_id', user_id).eq('site_code', site_code).execute()
+            client = self._get_client(use_admin=True)
+            result = client.table('user_sites').update(update_data).eq('user_id', user_id).eq('site_code', site_code).execute()
             return len(result.data) > 0
         except Exception as e:
             logger.error(f"사이트 토큰 업데이트 실패: {e}")
@@ -97,7 +101,8 @@ class DatabaseHelper:
     async def get_user_site_by_code(self, user_id: str, site_code: str) -> Optional[Dict[str, Any]]:
         """사이트 코드로 사용자 사이트 조회"""
         try:
-            result = self.supabase.table('user_sites').select('*').eq('user_id', user_id).eq('site_code', site_code).execute()
+            client = self._get_client(use_admin=True)
+            result = client.table('user_sites').select('*').eq('user_id', user_id).eq('site_code', site_code).execute()
             if result.data:
                 site_data = result.data[0]
                 # 토큰 복호화
@@ -112,7 +117,7 @@ class DatabaseHelper:
             return None
     
     # Chat Threads 관련 함수들
-    async def create_chat_thread(self, user_id: str, site_id: str = None, title: str = None, user=None) -> Dict[str, Any]:
+    async def create_chat_thread(self, user_id: str, site_id: str = None, title: str = None) -> Dict[str, Any]:
         """새로운 채팅 스레드 생성"""
         try:
             thread_data = {
@@ -121,82 +126,111 @@ class DatabaseHelper:
                 'title': title
             }
             
-            client = self.get_user_client(user)
+            client = self._get_client(use_admin=True)
             result = client.table('chat_threads').insert(thread_data).execute()
             return result.data[0] if result.data else {}
         except Exception as e:
             logger.error(f"채팅 스레드 생성 실패: {e}")
             return {}
     
-    async def get_user_threads(self, user_id: str, user=None) -> List[Dict[str, Any]]:
+    async def get_user_threads(self, requesting_user_id: str, user_id: str) -> List[Dict[str, Any]]:
         """사용자의 모든 스레드 조회"""
         try:
-            client = self.get_user_client(user)
+            # 권한 검증
+            self._verify_user_access(requesting_user_id, user_id)
+            
+            client = self._get_client(use_admin=True)
             result = client.table('chat_threads').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
             return result.data or []
         except Exception as e:
             logger.error(f"사용자 스레드 조회 실패: {e}")
             return []
     
-    async def get_thread_by_id(self, user_id: str, thread_id: str, user=None) -> Optional[Dict[str, Any]]:
+    async def get_thread_by_id(self, requesting_user_id: str, thread_id: str) -> Optional[Dict[str, Any]]:
         """스레드 ID로 스레드 조회"""
         try:
-            client = self.get_user_client(user)
-            result = client.table('chat_threads').select('*').eq('id', thread_id).eq('user_id', user_id).execute()
-            return result.data[0] if result.data else None
+            client = self._get_client(use_admin=True)
+            result = client.table('chat_threads').select('*').eq('id', thread_id).execute()
+            
+            if result.data:
+                thread = result.data[0]
+                # 권한 검증 - 스레드 소유자인지 확인
+                self._verify_user_access(requesting_user_id, thread['user_id'])
+                return thread
+            return None
         except Exception as e:
             logger.error(f"스레드 조회 실패: {e}")
             return None
     
-    async def delete_thread(self, user_id: str, thread_id: str, user=None) -> bool:
+    async def delete_thread(self, requesting_user_id: str, thread_id: str) -> bool:
         """스레드 삭제"""
         try:
-            client = self.get_user_client(user)
-            result = client.table('chat_threads').delete().eq('id', thread_id).eq('user_id', user_id).execute()
+            # 먼저 스레드 조회하여 권한 확인
+            thread = await self.get_thread_by_id(requesting_user_id, thread_id)
+            if not thread:
+                return False
+            
+            client = self._get_client(use_admin=True)
+            result = client.table('chat_threads').delete().eq('id', thread_id).execute()
             return len(result.data) > 0
         except Exception as e:
             logger.error(f"스레드 삭제 실패: {e}")
             return False
     
     # Chat Messages 관련 함수들
-    async def create_message(self, thread_id: str, user_id: str, message: str, 
-                           message_type: str = 'user', metadata: Dict = None, user=None) -> Dict[str, Any]:
+    async def create_message(self, requesting_user_id: str, thread_id: str, message: str, 
+                           message_type: str = 'user', metadata: Dict = None) -> Dict[str, Any]:
         """새로운 메시지 생성"""
         try:
+            # 스레드 소유권 확인
+            thread = await self.get_thread_by_id(requesting_user_id, thread_id)
+            if not thread:
+                raise PermissionError("스레드에 접근할 권한이 없습니다.")
+            
             message_data = {
                 'thread_id': thread_id,
-                'user_id': user_id,
+                'user_id': requesting_user_id,
                 'message': message,
                 'message_type': message_type,
                 'metadata': metadata or {}
             }
             
-            client = self.get_user_client(user)
+            client = self._get_client(use_admin=True)
             result = client.table('chat_messages').insert(message_data).execute()
             return result.data[0] if result.data else {}
         except Exception as e:
             logger.error(f"메시지 생성 실패: {e}")
             return {}
     
-    async def get_thread_messages(self, thread_id: str, user_id: str, user=None) -> List[Dict[str, Any]]:
+    async def get_thread_messages(self, requesting_user_id: str, thread_id: str) -> List[Dict[str, Any]]:
         """스레드의 모든 메시지 조회"""
         try:
-            client = self.get_user_client(user)
-            result = client.table('chat_messages').select('*').eq('thread_id', thread_id).eq('user_id', user_id).order('created_at', desc=False).execute()
+            # 스레드 소유권 확인
+            thread = await self.get_thread_by_id(requesting_user_id, thread_id)
+            if not thread:
+                raise PermissionError("스레드에 접근할 권한이 없습니다.")
+            
+            client = self._get_client(use_admin=True)
+            result = client.table('chat_messages').select('*').eq('thread_id', thread_id).order('created_at', desc=False).execute()
             return result.data or []
         except Exception as e:
             logger.error(f"스레드 메시지 조회 실패: {e}")
             return []
     
-    async def check_duplicate_message(self, thread_id: str, user_id: str, message: str, 
-                                    message_type: str = 'user', seconds: int = 1, user=None) -> bool:
+    async def check_duplicate_message(self, requesting_user_id: str, thread_id: str, message: str, 
+                                    message_type: str = 'user', seconds: int = 1) -> bool:
         """중복 메시지 검사"""
         try:
+            # 스레드 소유권 확인
+            thread = await self.get_thread_by_id(requesting_user_id, thread_id)
+            if not thread:
+                return False  # 접근 권한 없으면 중복 아니라고 처리
+            
             # 최근 몇 초 이내에 같은 메시지가 있는지 확인
             cutoff_time = datetime.now().replace(microsecond=0).isoformat()
             
-            client = self.get_user_client(user)
-            result = client.table('chat_messages').select('created_at').eq('thread_id', thread_id).eq('user_id', user_id).eq('message', message).eq('message_type', message_type).gte('created_at', cutoff_time).execute()
+            client = self._get_client(use_admin=True)
+            result = client.table('chat_messages').select('created_at').eq('thread_id', thread_id).eq('user_id', requesting_user_id).eq('message', message).eq('message_type', message_type).gte('created_at', cutoff_time).execute()
             
             return len(result.data) > 0
         except Exception as e:
