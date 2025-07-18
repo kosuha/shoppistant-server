@@ -136,6 +136,13 @@ async def verify_auth(credentials: HTTPAuthorizationCredentials = Depends(securi
         response = supabase.auth.get_user(credentials.credentials)
         if response.user is None:
             raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.")
+        
+        # 사용자별 Supabase 클라이언트 생성 및 세션 설정
+        user_client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+        user_client.auth.set_session(credentials.credentials, None)
+        
+        # 사용자 정보에 클라이언트 추가
+        response.user.supabase_client = user_client
         return response.user
     except Exception:
         raise HTTPException(status_code=401, detail="인증에 실패했습니다.")
@@ -302,7 +309,7 @@ async def set_access_token(request: Request, user=Depends(verify_auth)):
                 raise HTTPException(status_code=500, detail="토큰 업데이트에 실패했습니다.")
         else:
             # 새로운 사이트 생성
-            site_data = await db_helper.create_user_site(user.id, site_code, access_token=access_token)
+            site_data = await db_helper.create_user_site(user.id, site_code, access_token=access_token, user=user)
             if not site_data:
                 raise HTTPException(status_code=500, detail="사이트 생성에 실패했습니다.")
         
@@ -409,7 +416,7 @@ async def api_imweb_site_code(request: Request, user=Depends(verify_auth)):
                 logger.info(f"사용자 {user.id}의 기존 사이트 {site_code} 확인됨")
             else:
                 # 새로운 사이트 코드 저장
-                site_data = await db_helper.create_user_site(user.id, site_code)
+                site_data = await db_helper.create_user_site(user.id, site_code, user=user)
                 if not site_data:
                     raise HTTPException(status_code=500, detail="사이트 생성에 실패했습니다.")
                 
@@ -488,7 +495,7 @@ async def auth_code(request: Request, user=Depends(verify_auth)):
                     raise HTTPException(status_code=500, detail="토큰 업데이트에 실패했습니다.")
             else:
                 # 새로운 사이트 정보 추가
-                site_data = await db_helper.create_user_site(user.id, site_code, access_token=access_token, refresh_token=refresh_token)
+                site_data = await db_helper.create_user_site(user.id, site_code, access_token=access_token, refresh_token=refresh_token, user=user)
                 if not site_data:
                     raise HTTPException(status_code=500, detail="사이트 생성에 실패했습니다.")
             
@@ -557,7 +564,7 @@ async def get_user_sites(user=Depends(verify_auth)):
     }
     """
     try:
-        user_sites = await db_helper.get_user_sites(user.id)
+        user_sites = await db_helper.get_user_sites(user.id, user)
         
         # 민감한 정보 제거 (토큰 정보 숨김)
         safe_sites = []
@@ -612,7 +619,7 @@ async def get_threads(user=Depends(verify_auth)):
     }
     """
     try:
-        user_threads = await db_helper.get_user_threads(user.id)
+        user_threads = await db_helper.get_user_threads(user.id, user)
 
         return JSONResponse(status_code=200, content={
             "threads": user_threads,
@@ -961,7 +968,7 @@ async def create_thread(request: Request, user=Depends(verify_auth)):
             
         # 사용자가 해당 사이트에 접근 권한이 있는지 확인 (default는 항상 허용)
         if site_id != "default":
-            user_sites = await db_helper.get_user_sites(user.id)
+            user_sites = await db_helper.get_user_sites(user.id, user)
             site_exists = any(site["id"] == site_id for site in user_sites)
             if not site_exists:
                 raise HTTPException(status_code=403, detail=f"해당 사이트에 접근 권한이 없습니다.")

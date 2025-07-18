@@ -15,6 +15,10 @@ class DatabaseHelper:
         self.supabase = supabase_client
         self.admin_client = admin_client or supabase_client
     
+    def get_user_client(self, user):
+        """사용자별 클라이언트 반환, 없으면 기본 클라이언트 사용"""
+        return getattr(user, 'supabase_client', self.supabase)
+    
     async def create_user_profile(self, user_id: str, display_name: str = None) -> Dict[str, Any]:
         """사용자 프로필 생성"""
         try:
@@ -38,17 +42,18 @@ class DatabaseHelper:
             return None
     
     # User Sites 관련 함수들
-    async def get_user_sites(self, user_id: str) -> List[Dict[str, Any]]:
+    async def get_user_sites(self, user_id: str, user=None) -> List[Dict[str, Any]]:
         """사용자의 연결된 사이트 목록 조회"""
         try:
-            result = self.supabase.table('user_sites').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
+            client = self.get_user_client(user)
+            result = client.table('user_sites').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
             return result.data or []
         except Exception as e:
             logger.error(f"사용자 사이트 조회 실패: {e}")
             return []
     
     async def create_user_site(self, user_id: str, site_code: str, site_name: str = None, 
-                             access_token: str = None, refresh_token: str = None) -> Dict[str, Any]:
+                             access_token: str = None, refresh_token: str = None, user=None) -> Dict[str, Any]:
         """새로운 사이트 연결 생성"""
         try:
             site_data = {
@@ -59,7 +64,8 @@ class DatabaseHelper:
                 'refresh_token': self._encrypt_token(refresh_token) if refresh_token else None
             }
             
-            result = self.supabase.table('user_sites').insert(site_data).execute()
+            client = self.get_user_client(user)
+            result = client.table('user_sites').insert(site_data).execute()
             return result.data[0] if result.data else {}
         except Exception as e:
             logger.error(f"사이트 연결 생성 실패: {e}")
@@ -114,10 +120,11 @@ class DatabaseHelper:
             logger.error(f"채팅 스레드 생성 실패: {e}")
             return {}
     
-    async def get_user_threads(self, user_id: str) -> List[Dict[str, Any]]:
+    async def get_user_threads(self, user_id: str, user=None) -> List[Dict[str, Any]]:
         """사용자의 모든 스레드 조회"""
         try:
-            result = self.supabase.table('chat_threads').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
+            client = self.get_user_client(user)
+            result = client.table('chat_threads').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
             return result.data or []
         except Exception as e:
             logger.error(f"사용자 스레드 조회 실패: {e}")
