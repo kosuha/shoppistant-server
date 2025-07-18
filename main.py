@@ -373,17 +373,6 @@ async def api_imweb_site_code(request: Request, user=Depends(verify_auth)):
                     "updated_at": datetime.now().isoformat()
                 }
                 memory_store["user_sites"][user.id].append(site_data)
-            
-            # 아임웹에 연동 완료 요청
-            response = requests.patch(
-                "https://openapi.imweb.me/site-info/integration-complete",
-                headers={
-                    "Authorization": f"Bearer {IMWEB_CLIENT_SECRET}"
-                }
-            )
-            if response.json().get("statusCode") != 200:
-                print(f"아임웹 연동 완료 요청 실패: {response.json()}")
-                raise HTTPException(status_code=500, detail="아임웹 연동 완료 요청 실패")
 
         except Exception as store_error:
             raise HTTPException(status_code=500, detail=f"메모리 저장 실패: {str(store_error)}")
@@ -464,6 +453,17 @@ async def auth_code(request: Request, user=Depends(verify_auth)):
                 }
                 user_sites.append(site_data)
                 memory_store["user_sites"][user.id] = user_sites
+        
+        # 아임웹에 연동 완료 요청
+        response = requests.patch(
+            "https://openapi.imweb.me/site-info/integration-complete",
+            headers={
+                "Authorization": f"Bearer {access_token}"
+            }
+        )
+        if response.json().get("statusCode") != 200 or response.json().get("statusCode") != 404:
+            print(f"아임웹 연동 완료 요청 실패: {response.json()}")
+            raise HTTPException(status_code=500, detail="아임웹 연동 완료 요청 실패")
         
         print(f"사용자 {user.id}의 사이트 {site_code}에 액세스 토큰 저장됨.")
         return JSONResponse(status_code=200, content={
