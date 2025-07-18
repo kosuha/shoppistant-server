@@ -34,14 +34,20 @@ IMWEB_REDIRECT_URI = os.getenv("IMWEB_REDIRECT_URI")
 # Supabase 설정
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     raise ValueError("SUPABASE_URL과 SUPABASE_ANON_KEY 환경변수가 필요합니다.")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
+# 시스템 로그용 서비스 역할 클라이언트 (선택사항)
+supabase_admin = None
+if SUPABASE_SERVICE_ROLE_KEY:
+    supabase_admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
 # 데이터베이스 헬퍼 초기화
-db_helper = DatabaseHelper(supabase)
+db_helper = DatabaseHelper(supabase, supabase_admin)
 
 # Gemini API 설정
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")

@@ -11,8 +11,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 class DatabaseHelper:
-    def __init__(self, supabase_client: Client):
+    def __init__(self, supabase_client: Client, admin_client: Client = None):
         self.supabase = supabase_client
+        self.admin_client = admin_client or supabase_client
     
     async def create_user_profile(self, user_id: str, display_name: str = None) -> Dict[str, Any]:
         """사용자 프로필 생성"""
@@ -196,7 +197,7 @@ class DatabaseHelper:
                 'user_agent': user_agent
             }
             
-            result = self.supabase.table('system_logs').insert(log_data).execute()
+            result = self.admin_client.table('system_logs').insert(log_data).execute()
             return len(result.data) > 0
         except Exception as e:
             logger.error(f"시스템 로그 기록 실패: {e}")
@@ -233,7 +234,7 @@ class DatabaseHelper:
     async def health_check(self) -> Dict[str, Any]:
         """데이터베이스 연결 상태 확인"""
         try:
-            result = self.supabase.table('user_profiles').select('count').execute()
+            result = self.supabase.table('system_stats').select('count').execute()
             return {
                 'status': 'healthy',
                 'connected': True,
