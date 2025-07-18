@@ -282,6 +282,7 @@ async def set_access_token(request: Request, user=Depends(verify_auth)):
                     memory_store["user_sites"][user.id] = []
                 memory_store["user_sites"][user.id].append(site_data)
         
+        print(f"사용자 {user.id}의 사이트 {site_code}에 액세스 토큰 저장됨")
         return JSONResponse(status_code=200, content={
             "status": "success",
             "message": "액세스 토큰이 저장되었습니다."

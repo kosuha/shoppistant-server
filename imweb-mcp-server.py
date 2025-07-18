@@ -44,7 +44,15 @@ async def set_session_token(session_id: str, user_id: str, site_code: str, acces
 async def get_site_info(session_id: str, ctx: Context) -> Dict[str, Any]:
     """
     사이트 정보를 조회합니다.
-    사이트 정보에는 사용자 ID, 사이트 코드, 토큰, 생성일시가 포함됩니다.
+
+    사이트 정보:
+        siteCode: 사이트 코드
+        firstOrderTime: 첫 주문 시간
+        ownerUid: 사이트 소유자 ID
+        unitList: 사이트 단위 목록
+        unitList.0.unitCode: 단위 코드
+        unitList.0.name: 사이트 단위 이름
+        unitList.0.currency: 사이트 단위 통화
     
     Args:
         session_id: 세션 ID
@@ -61,14 +69,21 @@ async def get_site_info(session_id: str, ctx: Context) -> Dict[str, Any]:
         access_token = session_data["access_token"]
         
         await ctx.info(f"사이트 {site_code} 정보 조회 중...")
+
+        response = requests.get("https://openapi.imweb.me/site-info",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+            }
+        )
+        if response.status_code != 200:
+            await ctx.error(f"API 호출 실패: {response.status_code} - {response.text}")
+            return {"error": f"API 호출 실패: {response.status_code}"}
+        
+        response_data = response.json()
+        site_info = response_data.get("data", {})
         
         await ctx.info("사이트 정보 조회 완료")
-        return {
-            "user_id": session_data["user_id"],
-            "site_code": site_code,
-            "token": access_token,
-            "created_at": session_data["created_at"]
-        }
+        return site_info
         
     except Exception as e:
         await ctx.error(f"API 호출 실패: {str(e)}")
