@@ -402,7 +402,7 @@ async def auth_code(request: Request, user=Depends(verify_auth)):
         # 아임웹에 토큰 발급 요청
         response = requests.post(
             "https://openapi.imweb.me/oauth2/token",
-            json={
+            data={
                 "grantType": "authorization_code",
                 "clientId": IMWEB_CLIENT_ID,
                 "clientSecret": IMWEB_CLIENT_SECRET,
@@ -410,7 +410,7 @@ async def auth_code(request: Request, user=Depends(verify_auth)):
                 "redirectUri": IMWEB_REDIRECT_URI,
             },
             headers={
-                "Content-Type": "application/json"
+                "Content-Type": "application/x-www-form-urlencoded"
             }
         )
         if response.status_code != 200:
