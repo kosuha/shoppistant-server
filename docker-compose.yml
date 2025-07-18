@@ -11,6 +11,9 @@ services:
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - JWT_SECRET=${JWT_SECRET}
+      - IMWEB_CLIENT_ID=${IMWEB_CLIENT_ID}
+      - IMWEB_CLIENT_SECRET=${IMWEB_CLIENT_SECRET}
+      - IMWEB_REDIRECT_URI=${IMWEB_REDIRECT_URI}
     depends_on:
       - mcp-server
     networks:
