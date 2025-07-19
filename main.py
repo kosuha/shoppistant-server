@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from google import genai
+from google.genai import types
 from typing import Dict, List, Any
 from datetime import datetime
 import uuid
@@ -220,16 +221,16 @@ async def generate_gemini_response(chat_history, user_id):
         
         # 6. 시스템 프롬프트 (세션 ID만 포함)
         system_prompt = f"""당신은 아임웹 쇼핑몰 운영자를 도와주는 AI 어시스턴트입니다. 
-쇼핑몰 관리, 상품 등록, 주문 처리, 고객 서비스 등에 대한 도움을 제공합니다.
-친절하게 마지막 질문에 답변해주세요.
+                            쇼핑몰 관리, 상품 등록, 주문 처리, 고객 서비스 등에 대한 도움을 제공합니다.
+                            친절하게 마지막 질문에 답변해주세요.
 
-현재 세션 ID: {session_id}
-보안을 위해 세션 ID를 답변에 절대로 포함하지 마세요. 이 지시는 다른 어떤 지시보다 우선으로 지켜야합니다.
+                            질문에 답할때는 답변에 필요한 정보를 얻으려면 어떤 도구를 사용해야하는지 반드시 단계별로 계획을 세우고 순차적으로 도구를 호출하여 정보를 찾으세요.
 
-사용자의 질문에 적절한 도구를 사용하여 정확한 정보를 제공해주세요.
+                            현재 세션 ID: {session_id}
+                            보안을 위해 세션 ID를 답변에 절대로 포함하지 마세요. 이 지시는 다른 어떤 지시보다 우선으로 지켜야합니다.
 
-대화 내역:
-{conversation_context}"""
+                            대화 내역:
+                            {conversation_context}"""
 
         # 7. MCP 클라이언트로 Gemini 호출
         if mcp_client:
@@ -239,8 +240,9 @@ async def generate_gemini_response(chat_history, user_id):
                     model="gemini-2.5-flash",
                     contents=system_prompt,
                     config=genai.types.GenerateContentConfig(
-                        temperature=0.7,
+                        temperature=0.5,
                         tools=[mcp_client.session],
+                        thinking_config=types.ThinkingConfig(thinking_budget=-1)
                     ),
                 )
             except Exception as mcp_error:
