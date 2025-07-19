@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# 환경 변수 로드
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8001")
+
 # imweb 설정
 IMWEB_CLIENT_ID = os.getenv("IMWEB_CLIENT_ID")
 IMWEB_CLIENT_SECRET = os.getenv("IMWEB_CLIENT_SECRET")
@@ -85,7 +88,7 @@ async def lifespan(app: FastAPI):
     
     # MCP 클라이언트 초기화
     try:
-        mcp_client = Client("http://mcp-server:8001")
+        mcp_client = Client(MCP_SERVER_URL)
         await mcp_client.__aenter__()
         logger.info("MCP 클라이언트 연결 성공")
     except Exception as e:

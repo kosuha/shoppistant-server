@@ -15,6 +15,7 @@ services:
       - IMWEB_CLIENT_ID=${IMWEB_CLIENT_ID}
       - IMWEB_CLIENT_SECRET=${IMWEB_CLIENT_SECRET}
       - IMWEB_REDIRECT_URI=${IMWEB_REDIRECT_URI}
+      - MCP_SERVER_URL=${MCP_SERVER_URL}
     depends_on:
       - mcp-server
     networks:
