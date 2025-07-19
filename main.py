@@ -7,7 +7,7 @@ import os
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from google import genai
-from typing import Dict, List
+from typing import Dict, List, Any
 from datetime import datetime
 import uuid
 import threading
@@ -163,41 +163,56 @@ async def verify_auth(credentials: HTTPAuthorizationCredentials = Depends(securi
         raise HTTPException(status_code=401, detail="인증에 실패했습니다.")
 
 
-async def generate_gemini_response(chat_history, user_id, site_code):
+async def generate_gemini_response(chat_history, user_id):
     """
     대화 내역을 기반으로 Gemini API를 호출하여 AI 응답을 생성합니다.
     
     Args:
         chat_history: 대화 내역 리스트
         user_id: 사용자 ID
-        site_code: 사이트 코드
         
     Returns:
         str: AI 응답 텍스트
     """
     try:
-        # 1. DB에서 사용자 토큰 조회
-        user_token = get_user_token_from_db(user_id, site_code)
-        if not user_token:
-            return "아임웹 API 토큰이 설정되지 않았습니다. 먼저 토큰을 등록해주세요."
+        # 1. 사용자의 모든 사이트와 토큰 정보 가져오기
+        user_sites = await db_helper.get_user_sites(user_id, user_id)
+        if not user_sites:
+            return "아임웹 사이트가 연결되지 않았습니다. 먼저 사이트를 연결해주세요."
         
         # 2. 세션 ID 생성
         session_id = str(uuid.uuid4())
         
-        # 3. MCP 서버에 세션 토큰 설정
+        # 3. MCP 서버에 모든 사이트 정보 설정
         if mcp_client:
             try:
+                # 모든 사이트의 토큰 정보를 준비
+                sites_data = []
+                for site in user_sites:
+                    site_code = site.get('site_code')
+                    access_token = site.get('access_token')
+                    if site_code and access_token:
+                        # 토큰 복호화
+                        decrypted_token = db_helper._decrypt_token(access_token)
+                        sites_data.append({
+                            "site_name": site.get('site_name', site_code) or site_code,
+                            "site_code": site_code,
+                            "access_token": decrypted_token
+                        })
+                
+                if not sites_data:
+                    return "아임웹 API 토큰이 설정되지 않았습니다. 먼저 토큰을 등록해주세요."
+                
                 await mcp_client.call_tool("set_session_token", {
                     "session_id": session_id,
                     "user_id": user_id,
-                    "site_code": site_code,
-                    "access_token": user_token
+                    "sites": sites_data
                 })
             except Exception as e:
                 print(f"세션 토큰 설정 실패: {e}")
                 return "세션 설정에 실패했습니다."
         
-        # 4. 대화 내역을 Gemini 형식으로 변환
+        # 5. 대화 내역을 Gemini 형식으로 변환
         contents = []
         for msg in chat_history:
             if msg["message_type"] == "user":
@@ -207,7 +222,7 @@ async def generate_gemini_response(chat_history, user_id, site_code):
         
         conversation_context = "\n".join(contents)
         
-        # 5. 시스템 프롬프트 (세션 ID만 포함)
+        # 6. 시스템 프롬프트 (세션 ID만 포함)
         system_prompt = f"""당신은 아임웹 쇼핑몰 운영자를 도와주는 AI 어시스턴트입니다. 
 쇼핑몰 관리, 상품 등록, 주문 처리, 고객 서비스 등에 대한 도움을 제공합니다.
 친절하고 전문적인 톤으로 마지막 질문에 답변해주세요.
@@ -220,7 +235,7 @@ async def generate_gemini_response(chat_history, user_id, site_code):
 대화 내역:
 {conversation_context}"""
 
-        # 6. MCP 클라이언트로 Gemini 호출
+        # 7. MCP 클라이언트로 Gemini 호출
         if mcp_client:
             try:
                 # 세션 기반 MCP 도구 사용
@@ -263,31 +278,113 @@ async def generate_gemini_response(chat_history, user_id, site_code):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI 응답 생성 실패: {str(e)}")
 
-async def get_user_token_from_db(user_id: str, site_code: str) -> str:
+async def fetch_site_info_from_imweb(access_token: str) -> Dict[str, Any]:
     """
-    데이터베이스에서 사용자의 아임웹 API 토큰을 조회합니다.
+    아임웹 API를 통해 사이트 정보를 조회합니다.
+    
+    Args:
+        access_token: 아임웹 API 액세스 토큰
+        
+    Returns:
+        Dict: 사이트 정보 또는 에러 정보
+    """
+    try:
+        response = requests.get(
+            "https://openapi.imweb.me/site-info",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+            },
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            response_data = response.json()
+            if response_data.get("statusCode") == 200:
+                return {"success": True, "data": response_data.get("data", {})}
+            else:
+                return {"success": False, "error": response_data.get("error", {}).get("message", "알 수 없는 오류")}
+        else:
+            return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
+            
+    except Exception as e:
+        logger.error(f"아임웹 API 호출 실패: {e}")
+        return {"success": False, "error": str(e)}
+
+async def update_site_names_from_imweb(user_id: str) -> Dict[str, Any]:
+    """
+    사용자의 모든 사이트 정보를 아임웹 API로 조회하여 데이터베이스의 사이트 이름을 업데이트합니다.
     
     Args:
         user_id: 사용자 ID
-        site_code: 사이트 코드
         
     Returns:
-        str: 아임웹 API 토큰 또는 None
+        Dict: 업데이트 결과
     """
     try:
-        # 데이터베이스에서 토큰 조회
-        token = await db_helper.get_user_token_by_site_code(user_id, site_code)
-        if token:
-            return token
+        # 사용자의 모든 사이트 조회
+        user_sites = await db_helper.get_user_sites(user_id, user_id)
+        if not user_sites:
+            return {"success": False, "message": "연결된 사이트가 없습니다."}
         
-        # 개발용 기본 토큰 (실제로는 제거해야 함)
-        if site_code == "default":
-            return "test-access-token"
+        update_results = []
         
-        return None
+        for site in user_sites:
+            site_code = site.get('site_code')
+            access_token = site.get('access_token')
+            current_site_name = site.get('site_name')
+            
+            if not site_code or not access_token:
+                update_results.append({
+                    "site_code": site_code,
+                    "success": False,
+                    "error": "사이트 코드 또는 토큰이 없습니다."
+                })
+                continue
+            
+            # 토큰 복호화
+            decrypted_token = db_helper._decrypt_token(access_token)
+            
+            # 아임웹 API로 사이트 정보 조회
+            site_info_result = await fetch_site_info_from_imweb(decrypted_token)
+            
+            if site_info_result["success"]:
+                site_data = site_info_result["data"]
+                # 아임웹에서 사이트 이름 가져오기 (siteName 또는 title 필드)
+                imweb_site_name = site_data.get('siteName') or site_data.get('title') or site_data.get('name')
+                
+                if imweb_site_name and imweb_site_name != current_site_name:
+                    # 데이터베이스 업데이트
+                    update_success = await db_helper.update_site_name(user_id, site_code, imweb_site_name)
+                    update_results.append({
+                        "site_code": site_code,
+                        "success": update_success,
+                        "old_name": current_site_name,
+                        "new_name": imweb_site_name
+                    })
+                else:
+                    update_results.append({
+                        "site_code": site_code,
+                        "success": True,
+                        "message": "사이트 이름이 이미 최신상태입니다."
+                    })
+            else:
+                update_results.append({
+                    "site_code": site_code,
+                    "success": False,
+                    "error": site_info_result["error"]
+                })
+        
+        success_count = sum(1 for result in update_results if result["success"])
+        
+        return {
+            "success": True,
+            "message": f"{len(update_results)}개 사이트 중 {success_count}개 사이트 이름 업데이트 완료",
+            "results": update_results
+        }
+        
     except Exception as e:
-        logger.error(f"토큰 조회 실패: {e}")
-        return None
+        logger.error(f"사이트 이름 업데이트 실패: {e}")
+        return {"success": False, "error": str(e)}
 
 @app.post("/api/v1/tokens")
 async def set_access_token(request: Request, user=Depends(verify_auth)):
@@ -336,6 +433,20 @@ async def set_access_token(request: Request, user=Depends(verify_auth)):
         )
         
         logger.info(f"사용자 {user.id}의 사이트 {site_code}에 액세스 토큰 저장됨")
+        
+        # 사이트 정보를 조회해서 데이터베이스에 사이트 이름을 업데이트
+        try:
+            site_info_result = await fetch_site_info_from_imweb(access_token)
+            if site_info_result["success"]:
+                site_data = site_info_result["data"]
+                imweb_site_name = site_data.get('siteName') or site_data.get('title') or site_data.get('name')
+                if imweb_site_name:
+                    await db_helper.update_site_name(user.id, site_code, imweb_site_name)
+                    logger.info(f"사이트 {site_code}의 이름이 '{imweb_site_name}'으로 자동 업데이트됨")
+        except Exception as name_update_error:
+            # 사이트 이름 업데이트 실패는 전체 프로세스를 중단하지 않음
+            logger.warning(f"사이트 이름 자동 업데이트 실패: {name_update_error}")
+        
         return JSONResponse(status_code=200, content={
             "status": "success",
             "message": "액세스 토큰이 저장되었습니다."
@@ -541,6 +652,19 @@ async def auth_code(request: Request, user=Depends(verify_auth)):
                 raise HTTPException(status_code=404, detail="이미 연동된 사이트입니다.")
             print(f"아임웹 연동 완료 요청 실패: {response.json()}")
             raise HTTPException(status_code=500, detail="아임웹 연동 완료 요청 실패")
+        
+        # 사이트 정보를 조회해서 데이터베이스에 사이트 이름을 업데이트
+        try:
+            site_info_result = await fetch_site_info_from_imweb(access_token)
+            if site_info_result["success"]:
+                site_data = site_info_result["data"]
+                imweb_site_name = site_data.get('siteName') or site_data.get('title') or site_data.get('name')
+                if imweb_site_name:
+                    await db_helper.update_site_name(user.id, site_code, imweb_site_name)
+                    logger.info(f"사이트 {site_code}의 이름이 '{imweb_site_name}'으로 자동 업데이트됨")
+        except Exception as name_update_error:
+            # 사이트 이름 업데이트 실패는 전체 프로세스를 중단하지 않음
+            logger.warning(f"사이트 이름 자동 업데이트 실패: {name_update_error}")
         
         return JSONResponse(status_code=200, content={
             "status": "success",
@@ -895,11 +1019,8 @@ async def create_message(request: Request, user=Depends(verify_auth)):
                 # 스레드의 전체 대화 내역 조회 (새로 추가된 사용자 메시지 포함)
                 chat_history = await db_helper.get_thread_messages(user.id, thread_id)
                 
-                # 스레드에서 사이트 코드 가져오기
-                site_code = thread.get("site_id", "default") if thread else "default"
-                
                 # AI 응답 생성
-                ai_response = await generate_gemini_response(chat_history, user.id, site_code)
+                ai_response = await generate_gemini_response(chat_history, user.id)
                 
                 # AI 응답 저장
                 ai_message = await db_helper.create_message(

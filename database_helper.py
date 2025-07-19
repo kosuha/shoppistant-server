@@ -285,6 +285,39 @@ class DatabaseHelper:
         site_data = await self.get_user_site_by_code(user_id, site_code)
         return site_data.get('access_token') if site_data else None
     
+    async def get_user_token(self, user_id: str) -> Optional[str]:
+        """사용자 ID로 토큰 조회 - user_sites에서 첫 번째 사이트의 토큰 반환"""
+        try:
+            user_sites = await self.get_user_sites(user_id, user_id)
+            if user_sites:
+                # 첫 번째 사이트의 토큰 반환
+                first_site = user_sites[0]
+                access_token = first_site.get('access_token')
+                if access_token:
+                    return self._decrypt_token(access_token)
+            return None
+        except Exception as e:
+            logger.error(f"사용자 토큰 조회 실패: {e}")
+            return None
+    
+    async def update_site_name(self, user_id: str, site_code: str, site_name: str) -> bool:
+        """사이트 이름 업데이트"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('user_sites').update({
+                'site_name': site_name
+            }).eq('user_id', user_id).eq('site_code', site_code).execute()
+            
+            if result.data:
+                logger.info(f"사이트 {site_code}의 이름이 '{site_name}'으로 업데이트됨")
+                return True
+            else:
+                logger.warning(f"사이트 {site_code} 업데이트 실패")
+                return False
+        except Exception as e:
+            logger.error(f"사이트 이름 업데이트 실패: {e}")
+            return False
+    
     async def health_check(self) -> Dict[str, Any]:
         """데이터베이스 연결 상태 확인"""
         try:
