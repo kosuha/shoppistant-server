@@ -140,7 +140,7 @@ class DatabaseHelper:
             self._verify_user_access(requesting_user_id, user_id)
             
             client = self._get_client(use_admin=True)
-            result = client.table('chat_threads').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
+            result = client.table('chat_threads').select('*').eq('user_id', user_id).order('last_message_at', desc=True).execute()
             return result.data or []
         except Exception as e:
             logger.error(f"사용자 스레드 조회 실패: {e}")
@@ -316,6 +316,25 @@ class DatabaseHelper:
                 return False
         except Exception as e:
             logger.error(f"사이트 이름 업데이트 실패: {e}")
+            return False
+    
+    async def update_thread_title(self, thread_id: str, title: str) -> bool:
+        """스레드 제목 업데이트"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('chat_threads').update({
+                'title': title,
+                'updated_at': datetime.now().isoformat()
+            }).eq('id', thread_id).execute()
+            
+            if result.data:
+                logger.info(f"스레드 {thread_id}의 제목이 '{title}'으로 업데이트됨")
+                return True
+            else:
+                logger.warning(f"스레드 {thread_id} 제목 업데이트 실패")
+                return False
+        except Exception as e:
+            logger.error(f"스레드 제목 업데이트 실패: {e}")
             return False
     
     async def health_check(self) -> Dict[str, Any]:
