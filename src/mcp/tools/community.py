@@ -120,12 +120,8 @@ class Community:
             if status:
                 params["status"] = status.value
             if qna_create_time_type and qna_create_time:
-                if qna_create_time_type == RangeType.GTE:
-                    params["qnaCreateTime"] = qna_create_time[0]
-                elif qna_create_time_type == RangeType.LTE:
-                    params["qnaCreateTime"] = qna_create_time[0]
-                elif qna_create_time_type == RangeType.BETWEEN and len(qna_create_time) == 2:
-                    params["qnaCreateTime"] = ",".join(map(str, qna_create_time))
+                params["qnaCreateTimeType"] = qna_create_time_type.value
+                params["qnaCreateTime[]"] = qna_create_time
             
             response = requests.get("https://openapi.imweb.me/community/qna",
                 headers={
@@ -219,10 +215,13 @@ class Community:
                 return error
             
             access_token = target_site["access_token"]
+            print(access_token)
 
             params = {
-                "qnaNoList": ",".join(map(str, qna_no_list))
+                "qnaNoList[]": qna_no_list
             }
+
+            print(f"params: {params}")
             
             response = requests.get(
                 "https://openapi.imweb.me/community/qna-answer",
@@ -336,12 +335,7 @@ class Community:
                 params["isPhoto"] = is_photo.value
             if review_create_time_type and review_create_time:
                 params["reviewCreateTimeType"] = review_create_time_type.value
-                if review_create_time_type == RangeType.GTE:
-                    params["reviewCreateTime"] = review_create_time[0]
-                elif review_create_time_type == RangeType.LTE:
-                    params["reviewCreateTime"] = review_create_time[0]
-                elif review_create_time_type == RangeType.BETWEEN and len(review_create_time) == 2:
-                    params["reviewCreateTime"] = ",".join(map(str, review_create_time))
+                params["reviewCreateTime[]"] = review_create_time
             
             response = requests.get(
                 f"https://openapi.imweb.me/community/review",
@@ -387,7 +381,7 @@ class Community:
             access_token = target_site["access_token"]
 
             params = {
-                "reviewNoList": ",".join(map(str, review_no_list))
+                "reviewNoList[]": review_no_list
             }
             
             response = requests.get(

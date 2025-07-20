@@ -124,20 +124,12 @@ class MemberInfo:
             # 필터 파라미터 추가 (None이 아닌 경우에만)
             if join_time_range_type and join_time_range_value:
                 params["joinTimeRangeType"] = join_time_range_type
-                if join_time_range_type == RangeType.GTE:
-                    params["joinTimeRangeValue"] = join_time_range_value[0]
-                elif join_time_range_type == RangeType.LTE:
-                    params["joinTimeRangeValue"] = join_time_range_value[0]
-                elif join_time_range_type == RangeType.BETWEEN and len(join_time_range_value) == 2:
-                    params["joinTimeRangeValue"] = ",".join(map(str, join_time_range_value))
+                params["joinTimeRangeValue[]"] = join_time_range_value
+                
             if last_join_time_range_type and last_join_time_range_value:
                 params["lastJoinTimeRangeType"] = last_join_time_range_type
-                if last_join_time_range_type == RangeType.GTE:
-                    params["lastLoginTimeRangeValue"] = last_join_time_range_value[0]
-                elif last_join_time_range_type == RangeType.LTE:
-                    params["lastLoginTimeRangeValue"] = last_join_time_range_value[0]
-                elif last_join_time_range_type == RangeType.BETWEEN and len(last_join_time_range_value) == 2:
-                    params["lastLoginTimeRangeValue"] = ",".join(map(str, last_join_time_range_value))
+                params["lastLoginTimeRangeValue[]"] = last_join_time_range_value
+                
             if sms_agree:
                 params["smsAgree"] = sms_agree
             if email_agree:
@@ -735,7 +727,7 @@ class MemberInfo:
             
             json_data = {
                 "unitCode": unit_code,
-                "groupCodes": group_codes
+                "groupCodes[]": group_codes
             }
             
             response = requests.patch(
