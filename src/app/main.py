@@ -200,7 +200,8 @@ async def generate_gemini_response(chat_history, user_id):
                 if not sites_data:
                     return "아임웹 API 토큰이 설정되지 않았습니다. 먼저 토큰을 등록해주세요."
                 
-                await mcp_client.call_tool("set_session_token_tool", {
+                # MCP 도구 호출
+                await mcp_client.call_tool("set_session_token", {
                     "session_id": session_id,
                     "user_id": user_id,
                     "sites": sites_data

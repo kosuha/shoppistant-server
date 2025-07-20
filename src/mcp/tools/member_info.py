@@ -109,7 +109,7 @@ class MemberInfo:
                 return error
             
             access_token = target_site["access_token"]
-            unit_code = target_site.get("unit_code", "")
+            unit_code = target_site["unit_code"]
             
             params = {
                 "page": page,
@@ -228,7 +228,7 @@ class MemberInfo:
                 return error
             
             access_token = target_site["access_token"]
-            unit_code = target_site.get("unit_code", "")
+            unit_code = target_site["unit_code"]
             
             params = {
                 "page": page,
@@ -317,7 +317,7 @@ class MemberInfo:
                 return error
             
             access_token = target_site["access_token"]
-            unit_code = target_site.get("unit_code", "")
+            unit_code = target_site["unit_code"]
             
             params = {
                 "page": page,
@@ -368,7 +368,7 @@ class MemberInfo:
                 return error
             
             access_token = target_site["access_token"]
-            unit_code = target_site.get("unit_code", "")
+            unit_code = target_site["unit_code"]
             
             params = {
                 "page": page,
@@ -417,8 +417,8 @@ class MemberInfo:
                 return error
             
             access_token = target_site["access_token"]
-            unit_code = target_site.get("unit_code", "")
-            
+            unit_code = target_site["unit_code"]
+
             params = {
                 "page": page,
                 "limit": limit,
@@ -470,7 +470,7 @@ class MemberInfo:
                 return error
             
             access_token = target_site["access_token"]
-            unit_code = target_site.get("unit_code", "")
+            unit_code = target_site["unit_code"]
             
             params = {
                 "page": page,
@@ -574,11 +574,12 @@ class MemberInfo:
                 return error
             
             access_token = target_site["access_token"]
+            unit_code = target_site["unit_code"]
             
             params = {
                 "page": page,
                 "limit": limit,
-                "unitCode": target_site.get("unit_code", "")
+                "unitCode": unit_code
             }
             
             response = requests.get(
@@ -718,9 +719,10 @@ class MemberInfo:
                 return error
             
             access_token = target_site["access_token"]
+            unit_code = target_site["unit_code"]
             
             json_data = {
-                "unitCode": target_site.get("unit_code", ""),
+                "unitCode": unit_code,
                 "groupCodes": group_codes
             }
             
@@ -772,9 +774,10 @@ class MemberInfo:
                 return error
             
             access_token = target_site["access_token"]
+            unit_code = target_site["unit_code"]
             
             json_data = {
-                "unitCode": target_site.get("unit_code", ""),
+                "unitCode": unit_code,
                 "isDefaultGrade": is_default_grade.value,
                 "memberGradeCode": member_grade_code
             }
@@ -862,9 +865,10 @@ class MemberInfo:
                 return error
             
             access_token = target_site["access_token"]
+            unit_code = target_site["unit_code"]
 
             params = {
-                "unitCode": target_site.get("unit_code", "")
+                "unitCode": unit_code
             }
             
             response = requests.get(
