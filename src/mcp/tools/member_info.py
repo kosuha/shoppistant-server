@@ -7,7 +7,7 @@ class RangeType(Enum):
     LTE = "LTE" 
     BETWEEN = "BETWEEN"
 
-class AgreeType(Enum):
+class BoolType(Enum):
     Y = "Y"
     N = "N"
 
@@ -49,15 +49,24 @@ class MemberInfo:
         return target_site, None
     
     def _register_tools(self):
-        self.mcp.tool(self.get_member_info_members_tool)
-        self.mcp.tool(self.get_member_info_members_product_wish_list_tool)
-        self.mcp.tool(self.get_member_info_members_product_cart_tool)
-        self.mcp.tool(self.get_member_info_member_tool)
-        self.mcp.tool(self.get_member_info_groups_tool)
-        self.mcp.tool(self.get_member_info_groups_members_tool)
-        self.mcp.tool(self.get_member_info_grades_tool)
-    
-    async def get_member_info_members_tool(
+        self.mcp.tool(self.get_member_info_members)
+        self.mcp.tool(self.get_member_info_members_product_wish_list)
+        self.mcp.tool(self.get_member_info_members_product_cart)
+        self.mcp.tool(self.get_member_info_member)
+        self.mcp.tool(self.get_member_info_groups)
+        self.mcp.tool(self.get_member_info_groups_members)
+        self.mcp.tool(self.get_member_info_grades)
+        self.mcp.tool(self.get_member_info_grades_members)
+        self.mcp.tool(self.get_member_info_admin_groups)
+        self.mcp.tool(self.get_member_info_admin_groups_members)
+        self.mcp.tool(self.get_member_info_admin)
+        self.mcp.tool(self.patch_member_info_members_agree_info)
+        self.mcp.tool(self.put_member_info_members_groups)
+        self.mcp.tool(self.put_member_info_members_grade)
+        self.mcp.tool(self.get_member_info_members_wish_list)
+        self.mcp.tool(self.get_member_info_members_carts)
+        
+    async def get_member_info_members(
         self,
         session_id: str, 
         page: int, 
@@ -141,7 +150,7 @@ class MemberInfo:
         except Exception as e:
             return {"error": str(e)}
 
-    async def get_member_info_members_product_wish_list_tool(
+    async def get_member_info_members_product_wish_list(
         self,
         session_id: str, 
         page: int, 
@@ -162,7 +171,7 @@ class MemberInfo:
             limit: 한 페이지 row 양 (없으면 기본값 10으로 설정, max: 100)
             prodNo: 상품 번호
         """
-        print("##### CALL TOOL: member_info_members_product_wish_list")
+        print("##### CALL TOOL: get_member_info_members_product_wish_list")
         try:
             target_site, error = self._get_site_and_token(session_id, site_code, site_name)
             if error:
@@ -191,7 +200,7 @@ class MemberInfo:
         except Exception as e:
             return {"error": str(e)}
 
-    async def get_member_info_members_product_cart_tool(
+    async def get_member_info_members_product_cart(
         self,
         session_id: str, 
         page: int, 
@@ -212,7 +221,7 @@ class MemberInfo:
             limit: 한 페이지 row 양 (없으면 기본값 10으로 설정, max: 100)
             prodNo: 상품 번호
         """
-        print("##### CALL TOOL: member_info_members_product_cart")
+        print("##### CALL TOOL: get_member_info_members_product_cart")
         try:
             target_site, error = self._get_site_and_token(session_id, site_code, site_name)
             if error:
@@ -243,7 +252,7 @@ class MemberInfo:
         except Exception as e:
             return {"error": str(e)}
 
-    async def get_member_info_member_tool(
+    async def get_member_info_member(
         self,
         session_id: str, 
         member_uid: str,
@@ -260,7 +269,7 @@ class MemberInfo:
             site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
             member_uid: 회원 ID (회원 고유 식별자)
         """
-        print("##### CALL TOOL: member_info_member")
+        print("##### CALL TOOL: get_member_info_member")
         try:
             target_site, error = self._get_site_and_token(session_id, site_code, site_name)
             if error:
@@ -282,7 +291,7 @@ class MemberInfo:
         except Exception as e:
             return {"error": str(e)}
 
-    async def get_member_info_groups_tool(
+    async def get_member_info_groups(
         self,
         session_id: str, 
         page: int, 
@@ -301,7 +310,7 @@ class MemberInfo:
             site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
             site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
         """
-        print("##### CALL TOOL: member_info_groups")
+        print("##### CALL TOOL: get_member_info_groups")
         try:
             target_site, error = self._get_site_and_token(session_id, site_code, site_name)
             if error:
@@ -331,7 +340,7 @@ class MemberInfo:
         except Exception as e:
             return {"error": str(e)}
 
-    async def get_member_info_groups_members_tool(
+    async def get_member_info_groups_members(
         self,
         session_id: str, 
         page: int, 
@@ -382,7 +391,7 @@ class MemberInfo:
         except Exception as e:
             return {"error": str(e)}
 
-    async def get_member_info_grades_tool(
+    async def get_member_info_grades(
         self,
         session_id: str, 
         page: int, 
@@ -401,7 +410,7 @@ class MemberInfo:
             site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
             site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
         """
-        print("##### CALL TOOL: member_info_grades_tool")
+        print("##### CALL TOOL: get_member_info_grades")
         try:
             target_site, error = self._get_site_and_token(session_id, site_code, site_name)
             if error:
@@ -425,6 +434,448 @@ class MemberInfo:
             if response.status_code != 200:
                 print(f"회원 등급 목록 조회 실패: {response.status_code} - {response.text}")
                 return {"error": f"회원 등급 목록 조회 실패: {response.status_code}"}
+            
+            return response.json().get("data", {})
+            
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def get_member_info_grades_members(
+        self,
+        session_id: str, 
+        page: int, 
+        is_default_grade: BoolType,
+        limit: int = 10,
+        member_grade_code: str | None = None,
+        site_code: str | None = None,
+        site_name: str | None = None,
+    ):
+        """
+        회원 쇼핑 등급 목록 조회
+        특정 사이트의 회원 쇼핑 등급 목록을 페이지 단위로 조회합니다.
+
+        Args:
+            session_id: 세션 ID
+            page: 페이지 수 (min: 1)
+            limit: 한 페이지 row 양 (없으면 기본값 10으로 설정, max: 100)
+            is_default_grade: 기본 등급 여부 (Y: 기본 등급, N: 기본 등급 아님)
+            member_grade_code: 회원 등급 코드 (없으면 전체 조회)
+            site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
+            site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
+        """
+        print("##### CALL TOOL: get_member_info_grades_members")
+        try:
+            target_site, error = self._get_site_and_token(session_id, site_code, site_name)
+            if error:
+                return error
+            
+            access_token = target_site["access_token"]
+            unit_code = target_site.get("unit_code", "")
+            
+            params = {
+                "page": page,
+                "limit": limit,
+                "unitCode": unit_code
+            }
+
+            # 필터 파라미터 추가 (None이 아닌 경우에만)
+            if is_default_grade:
+                params["isDefaultGrade"] = is_default_grade.value
+            if member_grade_code:
+                params["memberGradeCode"] = member_grade_code
+            
+            response = requests.get(
+                "https://openapi.imweb.me/member-info/grades",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params=params
+            )
+            
+            if response.status_code != 200:
+                print(f"회원 쇼핑 등급 목록 조회 실패: {response.status_code} - {response.text}")
+                return {"error": f"회원 쇼핑 등급 목록 조회 실패: {response.status_code}"}
+            
+            return response.json().get("data", {})
+            
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def get_member_info_admin_groups(
+        self,
+        session_id: str, 
+        page: int, 
+        limit: int = 10,
+        site_code: str | None = None,
+        site_name: str | None = None,
+    ):
+        """
+        운영진 그룹 목록 조회
+        특정 사이트의 운영진 그룹 목록을 페이지 단위로 조회합니다.
+
+        Args:
+            session_id: 세션 ID
+            page: 페이지 수 (min: 1)
+            limit: 한 페이지 row 양 (없으면 기본값 10으로 설정, max: 100)
+            site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
+            site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
+        """
+        print("##### CALL TOOL: get_member_info_admin_groups")
+        try:
+            target_site, error = self._get_site_and_token(session_id, site_code, site_name)
+            if error:
+                return error
+            
+            access_token = target_site["access_token"]
+            
+            params = {
+                "page": page,
+                "limit": limit
+            }
+            
+            response = requests.get(
+                "https://openapi.imweb.me/member-info/admin/groups",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params=params
+            )
+            
+            if response.status_code != 200:
+                print(f"운영진 그룹 목록 조회 실패: {response.status_code} - {response.text}")
+                return {"error": f"운영진 그룹 목록 조회 실패: {response.status_code}"}
+            
+            return response.json().get("data", {})
+            
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def get_member_info_admin_groups_members(
+        self,
+        session_id: str, 
+        site_group_code: str,
+        page: int, 
+        limit: int = 10,
+        site_code: str | None = None,
+        site_name: str | None = None,
+    ):
+        """
+        운영진 그룹별 회원 목록 조회
+        특정 사이트의 운영진 그룹별 회원 목록을 페이지 단위로 조회합니다.
+
+        Args:
+            session_id: 세션 ID
+            site_group_code: 운영진 그룹 코드
+            page: 페이지 수 (min: 1)
+            limit: 한 페이지 row 양 (없으면 기본값 10으로 설정, max: 100)
+            site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
+            site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
+        """
+        print("##### CALL TOOL: get_member_info_admin_groups_members")
+        try:
+            target_site, error = self._get_site_and_token(session_id, site_code, site_name)
+            if error:
+                return error
+            
+            access_token = target_site["access_token"]
+            
+            params = {
+                "page": page,
+                "limit": limit,
+                "unitCode": target_site.get("unit_code", "")
+            }
+            
+            response = requests.get(
+                f"https://openapi.imweb.me/member-info/admin/groups/{site_group_code}/members",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params=params
+            )
+            
+            if response.status_code != 200:
+                print(f"운영진 그룹 목록 조회 실패: {response.status_code} - {response.text}")
+                return {"error": f"운영진 그룹 목록 조회 실패: {response.status_code}"}
+            
+            return response.json().get("data", {})
+            
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def get_member_info_admin(
+        self,
+        session_id: str, 
+        admin_uid: str,
+        site_code: str | None = None,
+        site_name: str | None = None,
+    ):
+        """
+        운영진 조회
+        특정 사이트의 운영진 정보를 조회합니다.
+
+        Args:
+            session_id: 세션 ID
+            admin_uid: 운영진 ID (운영진 고유 식별자)
+            site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
+            site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
+        """
+        print("##### CALL TOOL: get_member_info_admin")
+        try:
+            target_site, error = self._get_site_and_token(session_id, site_code, site_name)
+            if error:
+                return error
+            
+            access_token = target_site["access_token"]
+            
+            response = requests.get(
+                f"https://openapi.imweb.me/member-info/admin/{admin_uid}",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            
+            if response.status_code != 200:
+                print(f"운영진 조회 실패: {response.status_code} - {response.text}")
+                return {"error": f"운영진 조회 실패: {response.status_code}"}
+            
+            return response.json().get("data", {})
+            
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def patch_member_info_members_agree_info(
+        self,
+        session_id: str, 
+        member_uid: str,
+        sms_agree: BoolType | None = None,
+        email_agree: BoolType | None = None,
+        third_party_agree: BoolType | None = None,
+        site_code: str | None = None,
+        site_name: str | None = None,
+    ):
+        """
+        회원 동의 정보 수정
+        특정 회원의 SMS, 이메일, 제3자 제공 동의 정보를 수정합니다.
+
+        Args:
+            session_id: 세션 ID
+            member_uid: 회원 ID (회원 고유 식별자)
+            sms_agree: SMS 수신 동의 여부 (Y: 동의, N: 비동의)
+            email_agree: 이메일 수신 동의 여부 (Y: 동의, N: 비동의)
+            third_party_agree: 제3자 제공 동의 여부 (Y: 동의, N: 비동의)
+            site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
+            site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
+        """
+        print("##### CALL TOOL: patch_member_info_members_agree_info")
+        try:
+            target_site, error = self._get_site_and_token(session_id, site_code, site_name)
+            if error:
+                return error
+            
+            access_token = target_site["access_token"]
+            
+            json_data = {}
+            if sms_agree is not None:
+                json_data["smsAgree"] = sms_agree.value
+            if email_agree is not None:
+                json_data["emailAgree"] = email_agree.value
+            if third_party_agree is not None:
+                json_data["thirdPartyAgree"] = third_party_agree.value
+            
+            response = requests.patch(
+                f"https://openapi.imweb.me/member-info/members/{member_uid}/agree-info",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {access_token}"
+                },
+                json=json_data
+            )
+            
+            if response.status_code != 200:
+                print(f"회원 동의 정보 수정 실패: {response.status_code} - {response.text}")
+                return {"error": f"회원 동의 정보 수정 실패: {response.status_code}"}
+            
+            return response.json().get("data", {})
+            
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def put_member_info_members_groups(
+        self,
+        session_id: str, 
+        member_uid: str,
+        group_codes: List[str],
+        site_code: str | None = None,
+        site_name: str | None = None,
+    ):
+        """
+        회원 그룹 변경
+        특정 회원을 지정한 그룹으로 변경합니다.
+
+        Args:
+            session_id: 세션 ID
+            member_uid: 회원 ID (회원 고유 식별자)
+            group_codes: 변경할 그룹 코드 목록
+            site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
+            site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
+        """
+        print("##### CALL TOOL: put_member_info_members_groups")
+        try:
+            target_site, error = self._get_site_and_token(session_id, site_code, site_name)
+            if error:
+                return error
+            
+            access_token = target_site["access_token"]
+            
+            json_data = {
+                "unitCode": target_site.get("unit_code", ""),
+                "groupCodes": group_codes
+            }
+            
+            response = requests.patch(
+                f"https://openapi.imweb.me/member-info/members/{member_uid}/groups",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {access_token}"
+                },
+                json=json_data
+            )
+            
+            if response.status_code != 200:
+                print(f"회원 그룹 변경 실패: {response.status_code} - {response.text}")
+                return {"error": f"회원 그룹 변경 실패: {response.status_code}"}
+            
+            return response.json().get("data", {})
+            
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def put_member_info_members_grade(
+        self,
+        session_id: str, 
+        member_uid: str,
+        is_default_grade: BoolType,
+        member_grade_code: str,
+        useAutoGrade: BoolType | None = None,
+        site_code: str | None = None,
+        site_name: str | None = None,
+    ):
+        """
+        회원 등급 변경
+        특정 회원을 지정한 등급으로 변경합니다.
+
+        Args:
+            session_id: 세션 ID
+            member_uid: 회원 ID (회원 고유 식별자)
+            is_default_grade: 기본 등급 여부 (Y: 기본 등급, N: 기본 등급 아님)
+            member_grade_code: 변경할 회원 등급 코드
+            useAutoGrade: 자동 등급 적용 여부 (Y: 자동 적용, N: 수동 적용)
+            site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
+            site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
+        """
+        print("##### CALL TOOL: put_member_info_members_groups")
+        try:
+            target_site, error = self._get_site_and_token(session_id, site_code, site_name)
+            if error:
+                return error
+            
+            access_token = target_site["access_token"]
+            
+            json_data = {
+                "unitCode": target_site.get("unit_code", ""),
+                "isDefaultGrade": is_default_grade.value,
+                "memberGradeCode": member_grade_code
+            }
+            if useAutoGrade is not None:
+                json_data["useAutoGrade"] = useAutoGrade.value
+            
+            response = requests.patch(
+                f"https://openapi.imweb.me/member-info/members/{member_uid}/grade",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {access_token}"
+                },
+                json=json_data
+            )
+            
+            if response.status_code != 200:
+                print(f"회원 그룹 변경 실패: {response.status_code} - {response.text}")
+                return {"error": f"회원 그룹 변경 실패: {response.status_code}"}
+            
+            return response.json().get("data", {})
+            
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def get_member_info_members_wish_list(
+        self,
+        session_id: str, 
+        member_uid: str,
+        site_code: str | None = None,
+        site_name: str | None = None,
+    ):
+        """
+        특정 회원의 위시리스트 조회
+        특정 회원이 위시리스트에 추가한 상품 목록을 조회합니다.
+
+        Args:
+            session_id: 세션 ID
+            member_uid: 회원 ID (회원 고유 식별자)
+            site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
+            site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
+        """
+        print("##### CALL TOOL: get_member_info_members_wish_list")
+        try:
+            target_site, error = self._get_site_and_token(session_id, site_code, site_name)
+            if error:
+                return error
+            
+            access_token = target_site["access_token"]
+            
+            response = requests.get(
+                f"https://openapi.imweb.me/member-info/members/{member_uid}/wish-list",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            
+            if response.status_code != 200:
+                print(f"운영진 조회 실패: {response.status_code} - {response.text}")
+                return {"error": f"운영진 조회 실패: {response.status_code}"}
+            
+            return response.json().get("data", {})
+            
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def get_member_info_members_carts(
+        self,
+        session_id: str, 
+        member_uid: str,
+        site_code: str | None = None,
+        site_name: str | None = None,
+    ):
+        """
+        특정 회원의 장바구니 목록 조회
+        특정 회원이 장바구니에 추가한 상품 목록을 조회합니다.
+
+        Args:
+            session_id: 세션 ID
+            member_uid: 회원 ID (회원 고유 식별자)
+            site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
+            site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
+        """
+        print("##### CALL TOOL: get_member_info_members_carts")
+        try:
+            target_site, error = self._get_site_and_token(session_id, site_code, site_name)
+            if error:
+                return error
+            
+            access_token = target_site["access_token"]
+
+            params = {
+                "unitCode": target_site.get("unit_code", "")
+            }
+            
+            response = requests.get(
+                f"https://openapi.imweb.me/member-info/members/{member_uid}/carts",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params=params
+            )
+            
+            if response.status_code != 200:
+                print(f"운영진 조회 실패: {response.status_code} - {response.text}")
+                return {"error": f"운영진 조회 실패: {response.status_code}"}
             
             return response.json().get("data", {})
             
