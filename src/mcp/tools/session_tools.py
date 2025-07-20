@@ -23,14 +23,15 @@ class SessionTools:
         Args:
             session_id: 세션 ID
             user_id: 사용자 ID
-            sites: 사이트 정보 리스트 [{"site_name": "...", "site_code": "...", "access_token": "..."}, ...]
+            sites: 사이트 정보 리스트 [{"site_name": "...", "site_code": "...", "access_token": "...", "unit_code": "...", "primary_domain": "..."}, ...]
         """
         print("##### CALL TOOL: set_session_token")
 
         # 세션의 사이트 정보에 unit_code 추가
         for site in sites:
             if "access_token" in site:
-                response = requests.get("https://openapi.imweb.me/site-info",
+                response = requests.get(
+                    "https://openapi.imweb.me/site-info",
                     headers={
                         "Authorization": f"Bearer {site['access_token']}",
                     }
@@ -40,6 +41,18 @@ class SessionTools:
                     return {"error": f"사이트 호출 실패: {response.status_code}"}
                 site_info = response.json().get("data", {})
                 site["unit_code"] = site_info.get("unitList", [{}])[0].get("unitCode", "")
+                
+                response = requests.get(
+                    f"https://openapi.imweb.me/site-info/unit/{site["unit_code"]}",
+                    headers={
+                        "Authorization": f"Bearer {site['access_token']}",
+                    }
+                )
+                if response.status_code != 200:
+                    print(f"사이트 단위 정보 조회 실패: {response.status_code} - {response.text}")
+                    return {"error": f"사이트 단위 정보 조회 실패: {response.status_code}"}
+                unit_info = response.json().get("data", {})
+                site["primary_domain"] = unit_info.get("primaryDomain", "")
 
         self._session_tokens[session_id] = {
             "user_id": user_id,

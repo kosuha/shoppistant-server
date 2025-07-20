@@ -8,7 +8,7 @@ class SiteInfo:
         self._register_tools()
     
     def _register_tools(self):
-        self.mcp.tool(self.get_site_info_tool)
+        self.mcp.tool(self.get_site_info)
     
     def get_session_data(self, session_id: str):
         """세션 데이터를 가져오는 헬퍼 함수"""
@@ -16,7 +16,7 @@ class SiteInfo:
             return self.session_tools.get_session_data(session_id)
         return None
     
-    async def get_site_info_tool(self, session_id: str, site_name: str = None, site_code: str = None):
+    async def get_site_info(self, session_id: str, site_name: str = None, site_code: str = None):
         """
         사이트 이름 또는 사이트 코드로 사이트 정보를 조회합니다.
 

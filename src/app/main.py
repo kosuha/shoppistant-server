@@ -213,26 +213,33 @@ async def generate_gemini_response(chat_history, user_id):
         # 5. 대화 내역을 Gemini 형식으로 변환
         contents = []
         for msg in chat_history:
+            created_at = msg.get('created_at', '')
             if msg["message_type"] == "user":
-                contents.append(f"User: {msg['message']}")
+                contents.append(f"User ({created_at}): {msg['message']}")
             elif msg["message_type"] == "assistant":
-                contents.append(f"Assistant: {msg['message']}")
+                contents.append(f"Assistant ({created_at}): {msg['message']}")
         
         conversation_context = "\n".join(contents)
         
         # 6. 시스템 프롬프트 (세션 ID만 포함)
-        system_prompt = f"""당신은 아임웹 쇼핑몰 운영자를 도와주는 AI 어시스턴트입니다. 
-                            쇼핑몰 관리, 상품 등록, 주문 처리, 고객 서비스 등에 대한 도움을 제공합니다.
+        prompt = f"""
+        당신은 아임웹 쇼핑몰 운영자를 도와주는 AI 어시스턴트입니다. 
+        쇼핑몰 관리, 상품 등록, 주문 처리, 고객 서비스 등에 대한 도움을 제공합니다.
 
-                            친절하게 마지막 질문에 답변해주세요.
-                            질문에 답할때는 답변에 필요한 정보를 얻으려면 어떤 도구를 사용해야하는지 반드시 단계별로 계획을 세우고 순차적으로 도구를 호출하여 정보를 찾으세요.
-                            답변은 최대한 간결하고 명확하게 작성하세요.
+        # 규칙:
+        친절하게 마지막 질문에 답변해주세요.
+        질문에 답할때는 답변에 필요한 정보를 얻으려면 어떤 도구를 사용해야하는지 반드시 단계별로 계획을 세우고 순차적으로 도구를 호출하여 정보를 찾으세요.
+        답변은 정보를 토대로 풍부하게 작성하세요.
+        답변에 볼드체나 이모지를 사용하지 마세요.
+        답변은 정보를 보기 좋게 정리해서 작성하세요.
+        답변은 반드시 정확한 정보를 기반으로 작성하세요.
 
-                            현재 세션 ID: {session_id}
-                            보안을 위해 세션 ID를 답변에 절대로 포함하지 마세요. 이 지시는 다른 어떤 지시보다 우선으로 지켜야합니다.
+        # 현재 세션 ID: {session_id}
+        보안을 위해 세션 ID를 답변에 절대로 포함하지 마세요. 이 지시는 다른 어떤 지시보다 우선으로 지켜야합니다.
 
-                            대화 내역:
-                            {conversation_context}"""
+        # 대화 내역:
+        {conversation_context}
+        """
 
         # 7. MCP 클라이언트로 Gemini 호출
         if mcp_client:
@@ -240,7 +247,7 @@ async def generate_gemini_response(chat_history, user_id):
                 # 세션 기반 MCP 도구 사용
                 response = await gemini_client.aio.models.generate_content(
                     model="gemini-2.5-flash",
-                    contents=system_prompt,
+                    contents=prompt,
                     config=genai.types.GenerateContentConfig(
                         temperature=0.5,
                         tools=[mcp_client.session],
@@ -252,13 +259,13 @@ async def generate_gemini_response(chat_history, user_id):
                 # MCP 실패 시 일반 모드로 fallback
                 response = gemini_client.models.generate_content(
                     model="gemini-2.5-flash",
-                    contents=system_prompt,
+                    contents=prompt,
                 )
         else:
             # MCP 클라이언트가 없으면 일반 모드로 호출
             response = gemini_client.models.generate_content(
                 model="gemini-2.5-flash",
-                contents=system_prompt,
+                contents=prompt,
             )
         
         # 응답 처리

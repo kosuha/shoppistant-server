@@ -139,25 +139,23 @@ class Community:
         except Exception as e:
             return {"error": str(e)}
     
+    # Q&A에 답변을 등록해야하는데 API에 아직 답변완료 처리기능이 없어서 답변을 직접 등록하도록 유도합니다.
     async def post_community_qna(
         self, 
         session_id: str, 
         qna_no: int,
-        reply: str,
-        member_uid: str,
         site_name: str = None, 
         site_code: str = None
     ):
         """
-        Q&A에 답변을 등록합니다.
+        Q&A에 대한 답변 등록
+        Q&A에 답변을 등록해야하는데 API에 아직 답변완료 처리기능이 없어서 URL을 제공하여 답변을 직접 등록하도록 유도합니다.
         
         Args:
             session_id: 세션 ID
             site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
             site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
             qna_no: 답변할 Q&A 번호
-            reply: Q&A 답변 등록 내용
-            member_uid: 답변 작성자 ID
         """
         print("##### CALL TOOL: post_community_qna")
         try:
@@ -165,27 +163,29 @@ class Community:
             if error:
                 return error
             
-            access_token = target_site["access_token"]
+            # access_token = target_site["access_token"]
+            primary_domain = target_site.get("primary_domain")
 
-            json_data = {
-                "qnaNo": qna_no,
-                "reply": reply,
-                "memberUid": member_uid
+            # json_data = {
+            #     "qnaNo": qna_no,
+            #     "reply": reply,
+            #     "memberUid": member_uid
+            # }
+            
+            # response = requests.post("https://openapi.imweb.me/community/qna",
+            #     headers={
+            #         "Content-Type": "application/json",
+            #         "Authorization": f"Bearer {access_token}",
+            #     },
+            #     json=json_data
+            # )
+
+            url = f"https://{primary_domain}/admin/shopping/answers#admin_qna_detail!/{qna_no}"
+            print(f"답변 등록 URL: {url}")
+            return {
+                "message": "답변을 등록하려면 아래 URL로 이동하세요.",
+                "url": url,
             }
-            
-            response = requests.post("https://openapi.imweb.me/community/qna",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {access_token}",
-                },
-                json=json_data
-            )
-
-            if response.status_code != 200:
-                print(f"회원 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 목록 조회 실패: {response.status_code}"}
-            
-            return response.json().get("data", {})
             
         except Exception as e:
             return {"error": str(e)}
@@ -215,13 +215,10 @@ class Community:
                 return error
             
             access_token = target_site["access_token"]
-            print(access_token)
 
             params = {
                 "qnaNoList[]": qna_no_list
             }
-
-            print(f"params: {params}")
             
             response = requests.get(
                 "https://openapi.imweb.me/community/qna-answer",
