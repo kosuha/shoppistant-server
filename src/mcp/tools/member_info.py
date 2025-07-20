@@ -94,9 +94,13 @@ class MemberInfo:
             page: 페이지 수 (min: 1)
             limit: 한 페이지 row 양 (없으면 기본값 10으로 설정, max: 100)
             join_time_range_type: 가입 시간 검색 범위 (GTE: 이상, LTE: 이하, BETWEEN: 범위 지정)
-            join_time_range_value: 가입 시간 검색 값
+            join_time_range_value: 가입 시간 검색 범위 값 (GTE/LTE: 하나의 날짜, BETWEEN: 두 개의 날짜, 없으면 전체 조회)
+                - GTE/LTE: ['2021-01-01T00:00:00.000Z']
+                - BETWEEN: ['2021-01-01T00:00:00.000Z', '2021-01-31T23:59:59.000Z']
             last_join_time_range_type: 최근 로그인 시간 검색 범위
-            last_join_time_range_value: 최근 로그인 시간 검색 값
+            last_join_time_range_value: 최근 로그인 시간 검색 값 (GTE/LTE: 하나의 날짜, BETWEEN: 두 개의 날짜, 없으면 전체 조회)
+                - GTE/LTE: ['2021-01-01T00:00:00.000Z']
+                - BETWEEN: ['2021-01-01T00:00:00.000Z', '2021-01-31T23:59:59.000Z']
             sms_agree: sms 수신 여부 (Y: 수신, N: 비수신)
             email_agree: email 수신 여부 (Y: 수신, N: 비수신)
             third_party_agree: 개인정보 제3자 제공 여부 (Y: 동의, N: 비동의)
@@ -118,14 +122,22 @@ class MemberInfo:
             }
             
             # 필터 파라미터 추가 (None이 아닌 경우에만)
-            if join_time_range_type:
+            if join_time_range_type and join_time_range_value:
                 params["joinTimeRangeType"] = join_time_range_type
-            if join_time_range_value:
-                params["joinTimeRangeValue"] = join_time_range_value
-            if last_join_time_range_type:
-                params["lastLoginTimeRangeType"] = last_join_time_range_type
-            if last_join_time_range_value:
-                params["lastLoginTimeRangeValue"] = last_join_time_range_value
+                if join_time_range_type == RangeType.GTE:
+                    params["joinTimeRangeValue"] = join_time_range_value[0]
+                elif join_time_range_type == RangeType.LTE:
+                    params["joinTimeRangeValue"] = join_time_range_value[0]
+                elif join_time_range_type == RangeType.BETWEEN and len(join_time_range_value) == 2:
+                    params["joinTimeRangeValue"] = ",".join(map(str, join_time_range_value))
+            if last_join_time_range_type and last_join_time_range_value:
+                params["lastJoinTimeRangeType"] = last_join_time_range_type
+                if last_join_time_range_type == RangeType.GTE:
+                    params["lastLoginTimeRangeValue"] = last_join_time_range_value[0]
+                elif last_join_time_range_type == RangeType.LTE:
+                    params["lastLoginTimeRangeValue"] = last_join_time_range_value[0]
+                elif last_join_time_range_type == RangeType.BETWEEN and len(last_join_time_range_value) == 2:
+                    params["lastLoginTimeRangeValue"] = ",".join(map(str, last_join_time_range_value))
             if sms_agree:
                 params["smsAgree"] = sms_agree
             if email_agree:
