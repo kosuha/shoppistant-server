@@ -24,7 +24,7 @@ class SiteInfo:
             siteCode: 사이트 코드
             unitCode: 사이트 유닛 코드
             name: 사이트 이름
-            companyName: 호스팅 업체 이름
+            companyName: 회사/단체 이름
             presidentName: 대표자 이름
             phone: 사이트 전화번호
             email: 사이트 이메일
