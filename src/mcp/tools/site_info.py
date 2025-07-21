@@ -66,7 +66,7 @@ class SiteInfo:
             )
             if response.status_code != 200:
                 print(f"사이트 호출 실패: {response.status_code} - {response.text}")
-                return {"error": f"사이트 호출 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             response_data = response.json()
             site_info = response_data.get("data", {})
@@ -82,7 +82,7 @@ class SiteInfo:
             )
             if response.status_code != 200:
                 print(f"사이트 단위 정보 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"사이트 단위 정보 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             unit_info = response.json().get("data", {})
             return {

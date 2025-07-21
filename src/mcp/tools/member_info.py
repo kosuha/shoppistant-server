@@ -147,7 +147,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"회원 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 목록 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -197,7 +197,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"위시리스트 회원 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"위시리스트 회원 목록 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -249,7 +249,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"장바구니 회원 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"장바구니 회원 목록 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -271,7 +271,7 @@ class MemberInfo:
             session_id: 세션 ID
             site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
             site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
-            member_uid: 회원 ID (회원 고유 식별자)
+            member_uid: 회원 ID (회원 고유 식별자, 보통 이메일 사용)
         """
         print("##### CALL TOOL: get_member_info_member")
         try:
@@ -288,7 +288,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"회원 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -337,7 +337,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"회원 그룹 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 그룹 목록 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -388,7 +388,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"회원 그룹별 회원 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 그룹별 회원 목록 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -437,7 +437,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"회원 등급 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 등급 목록 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -496,7 +496,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"회원 쇼핑 등급 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 쇼핑 등급 목록 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -543,7 +543,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"운영진 그룹 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"운영진 그룹 목록 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -594,7 +594,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"운영진 그룹 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"운영진 그룹 목록 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -633,7 +633,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"운영진 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"운영진 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -656,7 +656,7 @@ class MemberInfo:
 
         Args:
             session_id: 세션 ID
-            member_uid: 회원 ID (회원 고유 식별자)
+            member_uid: 회원 ID (회원 고유 식별자, 보통 이메일 사용)
             sms_agree: SMS 수신 동의 여부 (Y: 동의, N: 비동의)
             email_agree: 이메일 수신 동의 여부 (Y: 동의, N: 비동의)
             third_party_agree: 제3자 제공 동의 여부 (Y: 동의, N: 비동의)
@@ -690,7 +690,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"회원 동의 정보 수정 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 동의 정보 수정 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -711,7 +711,7 @@ class MemberInfo:
 
         Args:
             session_id: 세션 ID
-            member_uid: 회원 ID (회원 고유 식별자)
+            member_uid: 회원 ID (회원 고유 식별자, 보통 이메일 사용)
             group_codes: 변경할 그룹 코드 목록
             site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
             site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
@@ -741,7 +741,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"회원 그룹 변경 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 그룹 변경 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -764,7 +764,7 @@ class MemberInfo:
 
         Args:
             session_id: 세션 ID
-            member_uid: 회원 ID (회원 고유 식별자)
+            member_uid: 회원 ID (회원 고유 식별자, 보통 이메일 사용)
             is_default_grade: 기본 등급 여부 (Y: 기본 등급, N: 기본 등급 아님)
             member_grade_code: 변경할 회원 등급 코드
             useAutoGrade: 자동 등급 적용 여부 (Y: 자동 적용, N: 수동 적용)
@@ -799,7 +799,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"회원 그룹 변경 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 그룹 변경 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -819,7 +819,7 @@ class MemberInfo:
 
         Args:
             session_id: 세션 ID
-            member_uid: 회원 ID (회원 고유 식별자)
+            member_uid: 회원 ID (회원 고유 식별자, 보통 이메일 사용)
             site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
             site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
         """
@@ -838,7 +838,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"운영진 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"운영진 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -858,7 +858,7 @@ class MemberInfo:
 
         Args:
             session_id: 세션 ID
-            member_uid: 회원 ID (회원 고유 식별자)
+            member_uid: 회원 ID (회원 고유 식별자, 보통 이메일 사용)
             site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
             site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
         """
@@ -883,7 +883,7 @@ class MemberInfo:
             
             if response.status_code != 200:
                 print(f"운영진 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"운영진 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             

@@ -94,7 +94,7 @@ class Community:
         Q&A 목록이 포함하는 정보:
             qnaNo: Q&A 번호
             prodNo: 상품 번호
-            memberUid: 회원 ID
+            memberUid: 회원 ID (회원 고유 식별자, 보통 이메일 사용)
             nick: 회원 닉네임
             subject: Q&A 제목
             body: Q&A 내용
@@ -145,7 +145,7 @@ class Community:
 
             if response.status_code != 200:
                 print(f"회원 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 목록 조회 실패: {response.status_code}"}
+                return {"error": f"회원 목록 조회 실패: {response}"}
             
             data = response.json().get("data", {})
             qna_list = data.get('list', [])
@@ -247,7 +247,7 @@ class Community:
 
             if response.status_code != 200:
                 print(f"회원 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 목록 조회 실패: {response.status_code}"}
+                return {"error": f"회원 목록 조회 실패: {response}"}
             
             return response.json().get("data", {})
             
@@ -288,7 +288,7 @@ class Community:
 
             if response.status_code != 200:
                 print(f"실패: {response.status_code} - {response.text}")
-                return {"error": f"실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -361,7 +361,7 @@ class Community:
 
             if response.status_code != 200:
                 print(f"실패: {response.status_code} - {response.text}")
-                return {"error": f"실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -408,7 +408,7 @@ class Community:
 
             if response.status_code != 200:
                 print(f"회원 목록 조회 실패: {response.status_code} - {response.text}")
-                return {"error": f"회원 목록 조회 실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -449,7 +449,7 @@ class Community:
 
             if response.status_code != 200:
                 print(f"실패: {response.status_code} - {response.text}")
-                return {"error": f"실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
@@ -502,7 +502,7 @@ class Community:
 
             if response.status_code != 200:
                 print(f"실패: {response.status_code} - {response.text}")
-                return {"error": f"실패: {response.status_code}"}
+                return response.json().get("error", {})
             
             return response.json().get("data", {})
             
