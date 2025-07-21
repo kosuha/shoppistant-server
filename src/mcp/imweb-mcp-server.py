@@ -1,10 +1,6 @@
 from fastmcp import FastMCP
 from tools.session_tools import SessionTools
-from tools.site_info import SiteInfo
-from tools.member_info import MemberInfo
-from tools.community import Community
-from tools.promotion import Promotion
-from tools.product import Product
+from tools.script import Script
 
 mcp = FastMCP(name="imweb-mcp-server")
 
@@ -12,11 +8,7 @@ mcp = FastMCP(name="imweb-mcp-server")
 session_tools = SessionTools(mcp)
 
 # 다른 도구들에 세션 참조 전달
-SiteInfo(mcp, session_tools)
-MemberInfo(mcp, session_tools)
-Community(mcp, session_tools)
-Promotion(mcp, session_tools)
-Product(mcp, session_tools)
+Script(mcp, session_tools)
 
 if __name__ == "__main__":
     mcp.run(
