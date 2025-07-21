@@ -89,7 +89,20 @@ class Community:
     ):
         """
         Q&A 목록을 조회합니다.
+        Q&A 정보를 제공할때는 반드시 Q&A 관리 URL을 링크로 제공해야합니다.
         
+        Q&A 목록이 포함하는 정보:
+            qnaNo: Q&A 번호
+            prodNo: 상품 번호
+            memberUid: 회원 ID
+            nick: 회원 닉네임
+            subject: Q&A 제목
+            body: Q&A 내용
+            status: Q&A 상태 (complete: 완료, wait: 대기)
+            url: Q&A 관리 URL
+            wtime: Q&A 등록 시간
+            utime: Q&A 수정 시간
+
         Args:
             session_id: 세션 ID
             site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
@@ -134,7 +147,12 @@ class Community:
                 print(f"회원 목록 조회 실패: {response.status_code} - {response.text}")
                 return {"error": f"회원 목록 조회 실패: {response.status_code}"}
             
-            return response.json().get("data", {})
+            data = response.json().get("data", {})
+            qna_list = data.get('list', [])
+            for qna in qna_list:
+                qna['url'] = f"https://{target_site['primary_domain']}/admin/shopping/answers#admin_qna_detail!/{qna['qnaNo']}"
+
+            return data
             
         except Exception as e:
             return {"error": str(e)}
@@ -148,7 +166,7 @@ class Community:
         site_code: str = None
     ):
         """
-        Q&A에 대한 답변 등록
+        Q&A에 대한 답변 등록 링크를 제공합니다.
         Q&A에 답변을 등록해야하는데 API에 아직 답변완료 처리기능이 없어서 URL을 제공하여 답변을 직접 등록하도록 유도합니다.
         
         Args:
@@ -181,10 +199,9 @@ class Community:
             # )
 
             url = f"https://{primary_domain}/admin/shopping/answers#admin_qna_detail!/{qna_no}"
-            print(f"답변 등록 URL: {url}")
             return {
-                "message": "답변을 등록하려면 아래 URL로 이동하세요.",
-                "url": url,
+                "message": "답변을 등록하려면 답변 등록 페이지로 이동하세요.",
+                "direct_link": f"[답변 등록 페이지]({url})",
             }
             
         except Exception as e:
