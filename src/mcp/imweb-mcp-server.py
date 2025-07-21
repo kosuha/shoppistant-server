@@ -3,6 +3,7 @@ from tools.session_tools import SessionTools
 from tools.site_info import SiteInfo
 from tools.member_info import MemberInfo
 from tools.community import Community
+from tools.promotion import Promotion
 
 mcp = FastMCP(name="imweb-mcp-server")
 
@@ -13,6 +14,7 @@ session_tools = SessionTools(mcp)
 SiteInfo(mcp, session_tools)
 MemberInfo(mcp, session_tools)
 Community(mcp, session_tools)
+Promotion(mcp, session_tools)
 
 if __name__ == "__main__":
     mcp.run(
