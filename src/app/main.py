@@ -20,6 +20,7 @@ from database_helper import DatabaseHelper
 
 # MCP 클라이언트 전역 변수
 mcp_client = None
+playwright_mcp_client = None
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +30,7 @@ load_dotenv()
 
 # 환경 변수 로드
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8001")
+PLAYWRIGHT_MCP_SERVER_URL = os.getenv("PLAYWRIGHT_MCP_SERVER_URL", "http://localhost:8002")
 
 # imweb 설정
 IMWEB_CLIENT_ID = os.getenv("IMWEB_CLIENT_ID")
@@ -68,7 +70,7 @@ security = HTTPBearer()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 시작 시 MCP 클라이언트 및 데이터베이스 초기화
-    global mcp_client, db_connected
+    global mcp_client, playwright_mcp_client, db_connected
     
     # 데이터베이스 연결 상태 확인
     try:
@@ -87,14 +89,24 @@ async def lifespan(app: FastAPI):
         logger.error(f"데이터베이스 초기화 실패: {e}")
         db_connected = False
     
-    # MCP 클라이언트 초기화
+    # MCP 클라이언트들 초기화
+    # 아임웹 MCP 클라이언트
     try:
         mcp_client = Client(MCP_SERVER_URL)
         await mcp_client.__aenter__()
-        logger.info("MCP 클라이언트 연결 성공")
+        logger.info("아임웹 MCP 클라이언트 연결 성공")
     except Exception as e:
-        logger.warning(f"MCP 클라이언트 연결 실패 (일반 모드로 계속): {e}")
+        logger.warning(f"아임웹 MCP 클라이언트 연결 실패 (일반 모드로 계속): {e}")
         mcp_client = None
+    
+    # Playwright MCP 클라이언트
+    try:
+        playwright_mcp_client = Client(PLAYWRIGHT_MCP_SERVER_URL)
+        await playwright_mcp_client.__aenter__()
+        logger.info("Playwright MCP 클라이언트 연결 성공")
+    except Exception as e:
+        logger.warning(f"Playwright MCP 클라이언트 연결 실패 (일반 모드로 계속): {e}")
+        playwright_mcp_client = None
     
     yield
     
@@ -102,9 +114,16 @@ async def lifespan(app: FastAPI):
     if mcp_client:
         try:
             await mcp_client.__aexit__(None, None, None)
-            logger.info("MCP 클라이언트 연결 종료")
+            logger.info("아임웹 MCP 클라이언트 연결 종료")
         except Exception as e:
-            logger.error(f"MCP 클라이언트 종료 실패: {e}")
+            logger.error(f"아임웹 MCP 클라이언트 종료 실패: {e}")
+    
+    if playwright_mcp_client:
+        try:
+            await playwright_mcp_client.__aexit__(None, None, None)
+            logger.info("Playwright MCP 클라이언트 연결 종료")
+        except Exception as e:
+            logger.error(f"Playwright MCP 클라이언트 종료 실패: {e}")
     
     # 시스템 종료 로그 기록
     if db_connected:
@@ -223,15 +242,20 @@ async def generate_gemini_response(chat_history, user_id):
         
         # 6. 시스템 프롬프트 (세션 ID만 포함)
         prompt = f"""
-        당신은 아임웹 쇼핑몰 운영자를 도와주는 AI 어시스턴트입니다. 
-        쇼핑몰 관리, 상품 등록, 주문 처리, 고객 서비스 등에 대한 도움을 제공합니다.
+        당신은 아임웹 사이트에 스크립트를 추가하는 것을 도와주는 AI 어시스턴트입니다. 
+
+        당신은 playwright를 사용하여 사용자의 아임웹 사이트 소스코드를 상세하게 분석하고,
+        사용자의 요구에 따라 적절한 스크립트를 작성합니다.
+        그리고 가능하다면 아임웹 사이트의 스크립트 등록, 수정, 삭제를 도와줄 수 있습니다.
+        아임웹 스크립트는 JavaScript 코드를 포함할 수 있으며, header, body, footer 위치에 따라 구분됩니다.
+        사용자의 요구 사항을 고려하여 head, body, footer 중 적절한 위치에 스크립트를 작성하세요.
+        JavaScript 코드를 삽입할 때는 반드시 <script> 태그로 감싸야 합니다.
 
         # 규칙:
         친절하게 마지막 질문에 답변해주세요.
-        질문에 답할때는 답변에 필요한 정보를 얻으려면 어떤 도구를 사용해야하는지 반드시 단계별로 계획을 세우고 순차적으로 도구를 호출하여 정보를 찾으세요.
-        답변은 정보를 토대로 풍부하게 작성하세요.
+        사용자의 요구를 충족하기위해 어떤 도구를 사용해야하는지 반드시 단계별로 계획을 세우고 순차적으로 도구를 호출하여 계획을 실행하세요.
+        스크립트 등록 전에 반드시 스크립트를 보여주고 허락받으세요.
         답변은 정보를 보기 좋게 마크다운 형식으로 정리해서 작성하세요.
-        답변은 반드시 정확한 정보를 기반으로 작성하세요.
         도구 호출에 실패한 경우 에러 'message'를 반드시 사용자에게 알리세요.
 
         # 현재 세션 ID: {session_id}
@@ -241,16 +265,23 @@ async def generate_gemini_response(chat_history, user_id):
         {conversation_context}
         """
 
-        # 7. MCP 클라이언트로 Gemini 호출
+        # 7. MCP 클라이언트들로 Gemini 호출
+        # 사용 가능한 MCP 도구들을 수집
+        available_tools = []
         if mcp_client:
+            available_tools.append(mcp_client.session)
+        if playwright_mcp_client:
+            available_tools.append(playwright_mcp_client.session)
+        
+        if available_tools:
             try:
-                # 세션 기반 MCP 도구 사용
+                # 세션 기반 MCP 도구 사용 (여러 MCP 서버의 도구들 통합)
                 response = await gemini_client.aio.models.generate_content(
                     model="gemini-2.5-flash",
                     contents=prompt,
                     config=genai.types.GenerateContentConfig(
                         temperature=0.5,
-                        tools=[mcp_client.session],
+                        tools=available_tools,
                         thinking_config=types.ThinkingConfig(thinking_budget=-1)
                     ),
                 )
@@ -479,7 +510,8 @@ async def health_check():
             "status": "success",
             "data": {
                 "database": db_health,
-                "mcp_client": "connected" if mcp_client else "disconnected",
+                "imweb_mcp_client": "connected" if mcp_client else "disconnected",
+                "playwright_mcp_client": "connected" if playwright_mcp_client else "disconnected",
                 "timestamp": datetime.now().isoformat()
             },
             "message": "헬스 체크 성공"

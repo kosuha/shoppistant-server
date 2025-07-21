@@ -1,6 +1,7 @@
 from fastmcp import FastMCP
 from tools.session_tools import SessionTools
 from tools.script import Script
+from tools.site_info import SiteInfo
 
 mcp = FastMCP(name="imweb-mcp-server")
 
@@ -8,6 +9,7 @@ mcp = FastMCP(name="imweb-mcp-server")
 session_tools = SessionTools(mcp)
 
 # 다른 도구들에 세션 참조 전달
+SiteInfo(mcp, session_tools)
 Script(mcp, session_tools)
 
 if __name__ == "__main__":

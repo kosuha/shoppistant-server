@@ -46,7 +46,10 @@ class Script:
         return target_site, None
     
     def _register_tools(self):
-        self.mcp.tool(self.post_product)
+        self.mcp.tool(self.get_script)
+        self.mcp.tool(self.post_script)
+        self.mcp.tool(self.put_script)
+        self.mcp.tool(self.delete_script)
         
     async def get_script(
         self, 
@@ -165,8 +168,8 @@ class Script:
     ):
         print("##### CALL TOOL: put_script")
         """
-        스크립트 등록
-        아임웹 사이트에 스크립트를 등록합니다.
+        스크립트 수정
+        아임웹 사이트의 스크립트를 수정합니다.
 
         Args:
             session_id: 세션 ID
@@ -194,6 +197,53 @@ class Script:
                     "unitCode": target_site["unit_code"],
                     "position": position.value,
                     "scriptContent": script_content
+                }
+            )
+            
+            if response.status_code != 200:
+                print(f"실패: {response.status_code} - {response.text}")
+                return response.json().get("error", {})
+            
+            return response.json().get("data", {})
+            
+        except Exception as e:
+            return {"error": str(e)}
+    
+    async def delete_script(
+        self, 
+        session_id: str, 
+        position: Position,
+        site_code: str = None, 
+        site_name: str = None
+    ):
+        print("##### CALL TOOL: delete_script")
+        """
+        스크립트 삭제
+        아임웹 사이트의 스크립트를 삭제합니다.
+
+        Args:
+            session_id: 세션 ID
+            position: 스크립트 위치
+            site_code: 사이트 코드 (없으면 첫 번째 사이트 사용)
+            site_name: 사이트 이름 (없으면 첫 번째 사이트 사용)
+        
+        """
+        try:
+            target_site, error = self._get_site_and_token(session_id, site_code, site_name)
+            if error:
+                return error
+            
+            access_token = target_site.get("access_token")
+            primary_domain = target_site.get("primary_domain")
+
+            response = requests.delete(
+                "https://openapi.imweb.me/script",
+                headers={
+                    "Authorization": f"Bearer {access_token}"
+                },
+                params={
+                    "unitCode": target_site["unit_code"],
+                    "position": position.value
                 }
             )
             

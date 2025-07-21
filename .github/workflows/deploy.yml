@@ -10,6 +10,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME_MAIN: ${{ github.repository }}/main-server
   IMAGE_NAME_MCP: ${{ github.repository }}/mcp-server
+  IMAGE_NAME_PLAYWRIGHT: ${{ github.repository }}/playwright-mcp-server
 
 jobs:
   test:
@@ -84,6 +85,17 @@ jobs:
           type=sha
           type=raw,value=latest,enable={{is_default_branch}}
     
+    - name: Extract metadata for Playwright MCP server
+      id: meta-playwright
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_PLAYWRIGHT }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha
+          type=raw,value=latest,enable={{is_default_branch}}
+    
     - name: Build and push main server image
       uses: docker/build-push-action@v5
       with:
@@ -101,6 +113,15 @@ jobs:
         push: true
         tags: ${{ steps.meta-mcp.outputs.tags }}
         labels: ${{ steps.meta-mcp.outputs.labels }}
+    
+    - name: Build and push Playwright MCP server image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.playwright
+        push: true
+        tags: ${{ steps.meta-playwright.outputs.tags }}
+        labels: ${{ steps.meta-playwright.outputs.labels }}
     
     - name: Deploy to EC2
       if: github.ref == 'refs/heads/main'
@@ -123,6 +144,7 @@ jobs:
           # 최신 이미지 pull
           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_MAIN }}:latest
           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_MCP }}:latest
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_PLAYWRIGHT }}:latest
           
           # docker-compose.yml 업데이트 (GitHub에서 가져오기)
           curl -o docker-compose.yml https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose.yml
@@ -139,6 +161,7 @@ jobs:
           echo "IMWEB_BASE_URL=${{ secrets.IMWEB_BASE_URL }}" >> .env
           echo "GITHUB_REPOSITORY=${{ github.repository }}" >> .env
           echo "MCP_SERVER_URL=${{ secrets.MCP_SERVER_URL }}" >> .env
+          echo "PLAYWRIGHT_MCP_SERVER_URL=${{ secrets.PLAYWRIGHT_MCP_SERVER_URL }}" >> .env
           
           # 새 컨테이너 시작
           docker-compose up -d
