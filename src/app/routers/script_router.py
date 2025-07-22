@@ -90,13 +90,17 @@ async def get_site_script_module(site_code: str):
         else:
             script_content = script_data.get('script_content', '// Empty script')
         
+        # 사이트 도메인 조회하여 CORS Origin 설정
+        site_domain = await script_service.db_helper.get_site_domain_by_code_public(site_code)
+        cors_origin = site_domain if site_domain else "*"  # 도메인이 없으면 모든 도메인 허용
+        
         # Content-Type을 application/javascript로 설정
         return Response(
             content=script_content,
             media_type="application/javascript",
             headers={
                 "Cache-Control": "public, max-age=300",  # 5분간 캐시
-                "Access-Control-Allow-Origin": "*",  # CORS 허용
+                "Access-Control-Allow-Origin": cors_origin,  # 사이트별 CORS 허용
                 "Access-Control-Allow-Methods": "GET",
                 "Access-Control-Allow-Headers": "*"
             }

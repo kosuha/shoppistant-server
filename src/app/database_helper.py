@@ -558,3 +558,20 @@ class DatabaseHelper:
         except Exception as e:
             logger.error(f"공개 사이트 스크립트 조회 실패: {e}")
             return None
+    
+    async def get_site_domain_by_code_public(self, site_code: str) -> Optional[str]:
+        """사이트 코드로 사이트 도메인 조회 (공개 접근용, 인증 불필요)"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('user_sites').select('site_domain').eq('site_code', site_code).execute()
+            
+            if result.data:
+                domain = result.data[0].get('site_domain', '')
+                logger.info(f"사이트 도메인 조회 성공: site_code={site_code}, domain={domain}")
+                return domain
+            else:
+                logger.info(f"사이트 도메인 없음: site_code={site_code}")
+                return None
+        except Exception as e:
+            logger.error(f"사이트 도메인 조회 실패: {e}")
+            return None
