@@ -17,20 +17,10 @@ services:
       - IMWEB_REDIRECT_URI=${IMWEB_REDIRECT_URI}
       - MCP_SERVER_URL=${MCP_SERVER_URL}
       - PLAYWRIGHT_MCP_SERVER_URL=${PLAYWRIGHT_MCP_SERVER_URL}
+      - SERVER_BASE_URL=${SERVER_BASE_URL}
     depends_on:
       - mcp-server
       - playwright-mcp-server
-    networks:
-      - imweb-network
-    restart: unless-stopped
-
-  mcp-server:
-    image: ghcr.io/${GITHUB_REPOSITORY}/mcp-server:latest
-    container_name: imweb-mcp-server
-    expose:
-      - "8001"
-    environment:
-      - JWT_SECRET=${JWT_SECRET}
     networks:
       - imweb-network
     restart: unless-stopped
