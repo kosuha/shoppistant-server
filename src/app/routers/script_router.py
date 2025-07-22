@@ -72,7 +72,7 @@ async def deploy_site_scripts(site_code: str, request: Request, user=Depends(get
 
 
 # 별도 라우터: 스크립트 모듈 제공용 (인증 불필요)
-module_router = APIRouter(prefix="/sites/{site_code}", tags=["script-module"])
+module_router = APIRouter(prefix="/api/v1/sites/{site_code}", tags=["script-module"])
 
 @module_router.get("/script", response_class=None)
 async def get_site_script_module(site_code: str):
