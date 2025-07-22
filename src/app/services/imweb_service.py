@@ -89,6 +89,21 @@ class ImwebService:
                     imweb_site_name = site_data.get('unitList')[0].get('name')
                     imweb_unit_code = site_data.get('unitList')[0].get('unitCode')
                     
+                    # 도메인 정보 가져오기 위해 유닛 상세 정보 조회
+                    if imweb_unit_code:
+                        unit_info_result = await self.fetch_site_unit_info(decrypted_token, imweb_unit_code)
+                        if unit_info_result["success"]:
+                            unit_data = unit_info_result["data"]
+                            primary_domain = unit_data.get('primaryDomain')
+                            
+                            # 도메인 정보 업데이트
+                            if primary_domain:
+                                domain_update_success = await self.db_helper.update_site_domain(user_id, site_code, primary_domain)
+                                if domain_update_success:
+                                    logger.info(f"사이트 {site_code}의 도메인을 {primary_domain}로 업데이트 완료")
+                                else:
+                                    logger.warning(f"사이트 {site_code}의 도메인 업데이트 실패")
+                    
                     # 사이트 이름 업데이트
                     if imweb_site_name and imweb_site_name != current_site_name:
                         # 데이터베이스 업데이트
@@ -240,6 +255,39 @@ class ImwebService:
             
         except Exception as e:
             logger.error(f"OAuth 토큰 발급 실패: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def fetch_site_unit_info(self, access_token: str, unit_code: str) -> Dict[str, Any]:
+        """
+        아임웹 API를 통해 특정 유닛의 상세 정보를 조회합니다.
+        
+        Args:
+            access_token: 아임웹 API 액세스 토큰
+            unit_code: 조회할 유닛 코드
+            
+        Returns:
+            Dict: 유닛 정보 (도메인 포함) 또는 에러 정보
+        """
+        try:
+            response = requests.get(
+                f"https://openapi.imweb.me/site-info/unit/{unit_code}",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                },
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                if response_data.get("statusCode") == 200:
+                    return {"success": True, "data": response_data.get("data", {})}
+                else:
+                    return {"success": False, "error": response_data.get("error", {}).get("message", "알 수 없는 오류")}
+            else:
+                return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
+                
+        except Exception as e:
+            logger.error(f"아임웹 유닛 정보 API 호출 실패: {e}")
             return {"success": False, "error": str(e)}
 
     async def complete_integration(self, access_token: str) -> Dict[str, Any]:

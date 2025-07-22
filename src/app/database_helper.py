@@ -337,6 +337,24 @@ class DatabaseHelper:
         except Exception as e:
             logger.error(f"사이트 유닛 코드 업데이트 실패: {e}")
             return False
+
+    async def update_site_domain(self, user_id: str, site_code: str, primary_domain: str) -> bool:
+        """사이트 도메인 업데이트"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('user_sites').update({
+                'primary_domain': primary_domain
+            }).eq('user_id', user_id).eq('site_code', site_code).execute()
+            
+            if result.data:
+                logger.info(f"사이트 {site_code}의 도메인이 '{primary_domain}'로 업데이트됨")
+                return True
+            else:
+                logger.warning(f"사이트 {site_code} 도메인 업데이트 실패")
+                return False
+        except Exception as e:
+            logger.error(f"사이트 도메인 업데이트 실패: {e}")
+            return False
     
     async def update_thread_title(self, thread_id: str, title: str) -> bool:
         """스레드 제목 업데이트"""
@@ -563,19 +581,59 @@ class DatabaseHelper:
         """사이트 코드로 사이트 도메인 조회 (공개 접근용, 인증 불필요)"""
         try:
             client = self._get_client(use_admin=True)
-            result = client.table('user_sites').select('site_domain').eq('site_code', site_code).execute()
+            # 먼저 DB에서 primary_domain 조회
+            result = client.table('user_sites').select('primary_domain, unit_code, access_token').eq('site_code', site_code).execute()
             
             if result.data:
-                domain = result.data[0].get('site_domain', '')
+                site_data = result.data[0]
+                domain = site_data.get('primary_domain', '')
+                
+                # DB에 도메인이 있으면 반환
                 if domain:
-                    # 도메인을 올바른 Origin 형태로 변환
                     if not domain.startswith(('http://', 'https://')):
                         domain = f"https://{domain}"
-                    logger.info(f"사이트 도메인 조회 성공: site_code={site_code}, domain={domain}")
+                    logger.info(f"사이트 도메인 조회 성공 (DB): site_code={site_code}, domain={domain}")
                     return domain
-                else:
-                    logger.info(f"사이트 도메인이 비어있음: site_code={site_code}")
-                    return None
+                
+                # DB에 도메인이 없으면 ImWeb API로 조회
+                unit_code = site_data.get('unit_code')
+                access_token = site_data.get('access_token')
+                
+                if unit_code and access_token:
+                    try:
+                        # 토큰 복호화
+                        decrypted_token = self._decrypt_token(access_token)
+                        
+                        # ImWeb API 호출
+                        import requests
+                        response = requests.get(
+                            f"https://openapi.imweb.me/site-info/unit/{unit_code}",
+                            headers={"Authorization": f"Bearer {decrypted_token}"},
+                            timeout=10
+                        )
+                        
+                        if response.status_code == 200:
+                            response_data = response.json()
+                            if response_data.get("statusCode") == 200:
+                                unit_data = response_data.get("data", {})
+                                primary_domain = unit_data.get('primaryDomain')
+                                
+                                if primary_domain:
+                                    # DB에 도메인 정보 저장
+                                    client.table('user_sites').update({
+                                        'primary_domain': primary_domain
+                                    }).eq('site_code', site_code).execute()
+                                    
+                                    if not primary_domain.startswith(('http://', 'https://')):
+                                        primary_domain = f"https://{primary_domain}"
+                                    
+                                    logger.info(f"사이트 도메인 조회 성공 (API): site_code={site_code}, domain={primary_domain}")
+                                    return primary_domain
+                    except Exception as api_error:
+                        logger.warning(f"ImWeb API 호출 실패, 기본값 사용: {api_error}")
+                
+                logger.info(f"사이트 도메인이 비어있음: site_code={site_code}")
+                return None
             else:
                 logger.info(f"사이트 도메인 없음: site_code={site_code}")
                 return None
