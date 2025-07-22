@@ -14,7 +14,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     from main import auth_service
     return await auth_service.verify_auth(credentials)
 
-@router.get("/")
+@router.get("/", response_model=None)
+@router.get("", response_model=None)  
 async def get_user_sites(user=Depends(get_current_user)):
     """사용자의 연결된 사이트 목록을 조회하는 API"""
     from main import imweb_service, db_helper
