@@ -115,7 +115,7 @@ API 버전과 서비스 상태를 확인합니다.
     {
       "id": "string",
       "user_id": "string",
-      "site_id": "string",
+      "site_code": "string",
       "created_at": "2024-01-01T00:00:00Z",
       "updated_at": "2024-01-01T00:00:00Z",
       "last_message_at": "2024-01-01T00:00:00Z"
@@ -157,7 +157,7 @@ API 버전과 서비스 상태를 확인합니다.
   "thread": {
     "id": "string",
     "user_id": "string",
-    "site_id": "string",
+    "site_code": "string",
     "created_at": "2024-01-01T00:00:00Z",
     "updated_at": "2024-01-01T00:00:00Z",
     "last_message_at": "2024-01-01T00:00:00Z"

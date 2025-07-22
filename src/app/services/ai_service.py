@@ -163,7 +163,7 @@ class AIService:
                             model="gemini-2.5-flash",
                             contents=prompt,
                             config=genai.types.GenerateContentConfig(
-                                temperature=0.3,
+                                temperature=0.6,
                                 tools=available_tools,
                                 response_schema=AIScriptResponse.model_json_schema(),
                                 thinking_config=types.ThinkingConfig(thinking_budget=-1)
@@ -173,8 +173,8 @@ class AIService:
                         structured_response = self.gemini_client.models.generate_content(
                             model="gemini-2.5-flash",
                             contents=prompt,
-                            generation_config=genai.types.GenerationConfig(
-                                temperature=0.3,
+                            config=genai.types.GenerateContentConfig(
+                                temperature=0.6,
                                 response_schema=AIScriptResponse.model_json_schema()
                             )
                         )
@@ -220,7 +220,7 @@ class AIService:
                         response = self.gemini_client.models.generate_content(
                             model="gemini-2.5-flash",
                             contents=prompt,
-                            generation_config=genai.types.GenerationConfig(temperature=0.5)
+                            config=genai.types.GenerateContentConfig(temperature=0.5)
                         )
                     
                     # 응답 처리

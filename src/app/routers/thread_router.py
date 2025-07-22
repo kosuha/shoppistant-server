@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from services.thread_service import ThreadService
+from services.auth_service import AuthService
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,12 +14,19 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     from main import auth_service
     return await auth_service.verify_auth(credentials)
 
-
-# 스레드 관련 엔드포인트들
-@router.get("/threads")
-async def get_threads(user=Depends(get_current_user)):
-    """사용자의 모든 스레드 목록을 조회하는 API"""
+def get_thread_service() -> ThreadService:
+    """ThreadService 인스턴스를 가져오는 의존성"""
     from main import thread_service
+    return thread_service
+
+
+@router.get("/threads")
+async def get_threads(
+    user=Depends(get_current_user),
+    thread_service: ThreadService = Depends(get_thread_service)
+):
+    print(f"[ROUTER] get_threads 스레드 조회 요청: user={user.id}")
+    """사용자의 모든 스레드 목록을 조회하는 API"""
     
     try:
         result = await thread_service.get_user_threads(user.id)
@@ -43,15 +51,18 @@ async def get_threads(user=Depends(get_current_user)):
 
 
 @router.post("/threads")
-async def create_thread(request: Request, user=Depends(get_current_user)):
+async def create_thread(
+    request: Request,
+    user=Depends(get_current_user),
+    thread_service: ThreadService = Depends(get_thread_service)
+):
     """새로운 채팅 스레드를 생성하는 API"""
-    from main import thread_service
     
     try:
         request_data = await request.json()
-        site_id = request_data.get("siteId")
+        site_code = request_data.get("siteId")
         
-        result = await thread_service.create_thread(user.id, site_id)
+        result = await thread_service.create_thread(user.id, site_code)
         
         if not result["success"]:
             raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
@@ -72,9 +83,13 @@ async def create_thread(request: Request, user=Depends(get_current_user)):
 
 
 @router.get("/threads/{thread_id}")
-async def get_thread(thread_id: str, user=Depends(get_current_user)):
+async def get_thread(
+    thread_id: str,
+    user=Depends(get_current_user),
+    thread_service: ThreadService = Depends(get_thread_service)
+):
+    print(f"[ROUTER] get_thread 스레드 조회 요청: thread_id={thread_id}, user={user.id}")
     """특정 스레드의 상세 정보를 조회하는 API"""
-    from main import thread_service
     
     try:
         result = await thread_service.get_thread_by_id(user.id, thread_id)
@@ -99,9 +114,12 @@ async def get_thread(thread_id: str, user=Depends(get_current_user)):
 
 
 @router.delete("/threads/{thread_id}")
-async def delete_thread(thread_id: str, user=Depends(get_current_user)):
+async def delete_thread(
+    thread_id: str,
+    user=Depends(get_current_user),
+    thread_service: ThreadService = Depends(get_thread_service)
+):
     """특정 스레드를 삭제하는 API"""
-    from main import thread_service
     
     try:
         result = await thread_service.delete_thread(user.id, thread_id)
@@ -125,9 +143,13 @@ async def delete_thread(thread_id: str, user=Depends(get_current_user)):
 
 
 @router.put("/threads/{thread_id}/title")
-async def update_thread_title(thread_id: str, request: Request, user=Depends(get_current_user)):
+async def update_thread_title(
+    thread_id: str,
+    request: Request,
+    user=Depends(get_current_user),
+    thread_service: ThreadService = Depends(get_thread_service)
+):
     """스레드 제목을 업데이트하는 API"""
-    from main import thread_service
     
     try:
         request_data = await request.json()
@@ -156,9 +178,12 @@ async def update_thread_title(thread_id: str, request: Request, user=Depends(get
 
 # 메시지 관련 엔드포인트들
 @router.get("/messages/{thread_id}")
-async def get_messages(thread_id: str, user=Depends(get_current_user)):
+async def get_messages(
+    thread_id: str,
+    user=Depends(get_current_user),
+    thread_service: ThreadService = Depends(get_thread_service)
+):
     """특정 스레드의 모든 메시지를 조회하는 API"""
-    from main import thread_service
     
     try:
         result = await thread_service.get_thread_messages(user.id, thread_id)
@@ -183,9 +208,12 @@ async def get_messages(thread_id: str, user=Depends(get_current_user)):
 
 
 @router.post("/messages")
-async def create_message(request: Request, user=Depends(get_current_user)):
+async def create_message(
+    request: Request,
+    user=Depends(get_current_user),
+    thread_service: ThreadService = Depends(get_thread_service)
+):
     """새로운 메시지를 생성하는 API"""
-    from main import thread_service
     
     try:
         request_data = await request.json()

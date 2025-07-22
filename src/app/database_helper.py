@@ -119,12 +119,12 @@ class DatabaseHelper:
             return None
     
     # Chat Threads 관련 함수들
-    async def create_chat_thread(self, user_id: str, site_id: str = None, title: str = None) -> Dict[str, Any]:
+    async def create_chat_thread(self, user_id: str, site_code: str = None, title: str = None) -> Dict[str, Any]:
         """새로운 채팅 스레드 생성"""
         try:
             thread_data = {
                 'user_id': user_id,
-                'site_id': site_id,
+                'site_code': site_code,
                 'title': title
             }
             

@@ -65,7 +65,7 @@ class ScriptDeployRequest(BaseModel):
 class ScriptDeployResponse(BaseModel):
     """스크립트 배포 응답을 위한 모델"""
     deployed_at: str = Field(..., description="배포 완료 시간 (ISO 8601 형식)")
-    site_id: str = Field(..., description="배포된 사이트 ID")
+    site_code: str = Field(..., description="배포된 사이트 ID")
     deployed_scripts: Dict[str, Optional[str]] = Field(
         ..., 
         description="실제로 배포된 스크립트들"

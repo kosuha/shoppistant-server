@@ -12,31 +12,31 @@ class ThreadService:
         self.db_helper = db_helper
         self.ai_service = ai_service
 
-    async def create_thread(self, user_id: str, site_id: Optional[str] = None) -> Dict[str, Any]:
+    async def create_thread(self, user_id: str, site_code: Optional[str] = None) -> Dict[str, Any]:
         """
         새로운 채팅 스레드를 생성합니다.
         
         Args:
             user_id: 사용자 ID
-            site_id: 사이트 ID (선택사항)
+            site_code: 사이트 ID (선택사항)
             
         Returns:
             Dict: 스레드 생성 결과
         """
         try:
-            # site_id가 없으면 기본값 사용
-            if not site_id:
-                site_id = "default"
+            # site_code가 없으면 기본값 사용
+            if not site_code:
+                site_code = "default"
                 
             # 사용자가 해당 사이트에 접근 권한이 있는지 확인 (default는 항상 허용)
-            if site_id != "default":
+            if site_code != "default":
                 user_sites = await self.db_helper.get_user_sites(user_id, user_id)
-                site_exists = any(site["id"] == site_id for site in user_sites)
+                site_exists = any(site["id"] == site_code for site in user_sites)
                 if not site_exists:
                     return {"success": False, "error": "해당 사이트에 접근 권한이 없습니다.", "status_code": 403}
 
             # 새 스레드를 데이터베이스에 생성
-            thread_data = await self.db_helper.create_chat_thread(user_id, site_id)
+            thread_data = await self.db_helper.create_chat_thread(user_id, site_code)
             
             if not thread_data:
                 return {"success": False, "error": "스레드 생성에 실패했습니다.", "status_code": 500}
@@ -47,7 +47,7 @@ class ThreadService:
             await self.db_helper.log_system_event(
                 user_id=user_id,
                 event_type='thread_created',
-                event_data={'thread_id': thread_id, 'site_id': site_id}
+                event_data={'thread_id': thread_id, 'site_code': site_code}
             )
             
             return {"success": True, "data": {"threadId": thread_id}}

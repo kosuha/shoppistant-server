@@ -146,35 +146,35 @@ class ScriptService:
             logger.error(f"아임웹 스크립트 {method} 실패: {e}")
             return {"success": False, "error": str(e)}
 
-    async def get_site_scripts(self, user_id: str, site_id: str) -> Dict[str, Any]:
-        print(f"[SERVICE] get_site_scripts 스크립트 조회 요청: user_id={user_id}, site_id={site_id}")
+    async def get_site_scripts(self, user_id: str, site_code: str) -> Dict[str, Any]:
+        print(f"[SERVICE] get_site_scripts 스크립트 조회 요청: user_id={user_id}, site_code={site_code}")
         """
         특정 사이트의 현재 스크립트를 조회합니다.
         
         Args:
             user_id: 사용자 ID
-            site_id: 사이트 ID (사이트 코드)
+            site_code: 사이트 ID (사이트 코드)
             
         Returns:
             Dict: 스크립트 조회 결과
         """
         try:
             # 사용자가 해당 사이트에 접근 권한이 있는지 확인
-            site = await self.db_helper.get_user_site_by_code(user_id, site_id)
+            site = await self.db_helper.get_user_site_by_code(user_id, site_code)
             if not site:
-                logger.error(f"사용자 {user_id}가 사이트 {site_id}에 접근할 수 없습니다.")
+                logger.error(f"사용자 {user_id}가 사이트 {site_code}에 접근할 수 없습니다.")
                 return {"success": False, "error": "사이트를 찾을 수 없거나 접근 권한이 없습니다.", "status_code": 404}
             
             # 액세스 토큰 확인
             access_token = site.get('access_token')
             if not access_token:
-                logger.error(f"사이트 {site_id}의 API 토큰이 설정되지 않았습니다.")
+                logger.error(f"사이트 {site_code}의 API 토큰이 설정되지 않았습니다.")
                 return {"success": False, "error": "사이트의 API 토큰이 설정되지 않았습니다.", "status_code": 400}
             
             # 사이트 유닛 코드 확인
             unit_code = site.get('unit_code')
             if not unit_code:
-                logger.error(f"사이트 {site_id}의 유닛 코드가 설정되지 않았습니다.")
+                logger.error(f"사이트 {site_code}의 유닛 코드가 설정되지 않았습니다.")
                 return {"success": False, "error": "사이트의 유닛 코드가 설정되지 않았습니다.", "status_code": 400}
             
             # 토큰 복호화
@@ -190,7 +190,7 @@ class ScriptService:
             await self.db_helper.log_system_event(
                 user_id=user_id,
                 event_type='script_retrieved',
-                event_data={'site_code': site_id, 'action': 'get_scripts'}
+                event_data={'site_code': site_code, 'action': 'get_scripts'}
             )
             
             return {"success": True, "data": script_result["data"]}
@@ -199,13 +199,13 @@ class ScriptService:
             logger.error(f"스크립트 조회 실패: {e}")
             return {"success": False, "error": str(e), "status_code": 500}
 
-    async def deploy_site_scripts(self, user_id: str, site_id: str, scripts_data: Dict[str, str]) -> Dict[str, Any]:
+    async def deploy_site_scripts(self, user_id: str, site_code: str, scripts_data: Dict[str, str]) -> Dict[str, Any]:
         """
         특정 사이트에 스크립트를 배포합니다.
         
         Args:
             user_id: 사용자 ID
-            site_id: 사이트 ID (사이트 코드)
+            site_code: 사이트 ID (사이트 코드)
             scripts_data: 배포할 스크립트 데이터 (header, body, footer)
             
         Returns:
@@ -213,7 +213,7 @@ class ScriptService:
         """
         try:
             # 사용자가 해당 사이트에 접근 권한이 있는지 확인
-            site = await self.db_helper.get_user_site_by_code(user_id, site_id)
+            site = await self.db_helper.get_user_site_by_code(user_id, site_code)
             if not site:
                 return {"success": False, "error": "사이트를 찾을 수 없거나 접근 권한이 없습니다.", "status_code": 404}
             
@@ -268,9 +268,9 @@ class ScriptService:
                     
                     if delete_result["success"]:
                         deployment_results[position] = ""  # 삭제된 것을 빈 문자열로 표시
-                        logger.info(f"스크립트 삭제 성공: {site_id} - {position}")
+                        logger.info(f"스크립트 삭제 성공: {site_code} - {position}")
                     else:
-                        logger.warning(f"스크립트 삭제 실패 (무시): {site_id} - {position}: {delete_result.get('error', '알 수 없는 오류')}")
+                        logger.warning(f"스크립트 삭제 실패 (무시): {site_code} - {position}: {delete_result.get('error', '알 수 없는 오류')}")
                         # 삭제 실패는 스크립트가 원래 없었을 수도 있으므로 에러로 처리하지 않음
                         deployment_results[position] = ""
                         
@@ -301,7 +301,7 @@ class ScriptService:
                             }
                     
                     deployment_results[position] = script_content
-                    logger.info(f"스크립트 배포 성공: {site_id} - {position}")
+                    logger.info(f"스크립트 배포 성공: {site_code} - {position}")
                     
                 except Exception as deploy_error:
                     logger.error(f"{position} 스크립트 배포 실패: {deploy_error}")
@@ -319,7 +319,7 @@ class ScriptService:
                 user_id=user_id,
                 event_type='script_deployed',
                 event_data={
-                    'site_code': site_id,
+                    'site_code': site_code,
                     'action': 'deploy_scripts',
                     'deployed_positions': list(scripts_to_deploy.keys()),
                     'deleted_positions': scripts_to_delete,
@@ -331,7 +331,7 @@ class ScriptService:
                 "success": True,
                 "data": {
                     "deployed_at": deployed_at,
-                    "site_id": site_id,
+                    "site_code": site_code,
                     "deployed_scripts": deployment_results
                 },
                 "message": f"{len(scripts_to_deploy)}개 스크립트 배포, {len(scripts_to_delete)}개 스크립트 삭제가 완료되었습니다."

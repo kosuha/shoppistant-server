@@ -59,7 +59,7 @@ AI Shop Assistant 백엔드 API 개발을 위한 요구사항 문서입니다.
   "status": "success",
   "data": {
     "deployed_at": "2025-07-22T10:30:00Z",
-    "site_id": "site123"
+    "site_code": "site123"
   }
 }
 ```

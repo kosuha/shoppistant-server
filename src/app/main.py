@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -65,17 +65,18 @@ db_connected = False
 # 서비스 인스턴스들
 db_helper = DatabaseHelper(supabase, supabase_admin)
 auth_service = AuthService(supabase, db_helper)
-ai_service = None  # lifespan에서 초기화
+# AI 서비스는 일단 None으로 시작 (playwright_mcp_client가 필요)
+ai_service = AIService(gemini_client, None, db_helper)  # playwright_mcp_client는 나중에 업데이트
 imweb_service = ImwebService(IMWEB_CLIENT_ID, IMWEB_CLIENT_SECRET, IMWEB_REDIRECT_URI, db_helper)
 script_service = ScriptService(db_helper)
-thread_service = None  # lifespan에서 초기화 (ai_service 의존)
+thread_service = ThreadService(db_helper, ai_service)
 
 security = HTTPBearer()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # 시작 시 Playwright MCP 클라이언트 및 데이터베이스 초기화
-    global playwright_mcp_client, db_connected, ai_service, thread_service
+    global playwright_mcp_client, db_connected
     
     # 데이터베이스 연결 상태 확인
     try:
@@ -99,13 +100,15 @@ async def lifespan(_app: FastAPI):
         playwright_mcp_client = MCPClient(PLAYWRIGHT_MCP_SERVER_URL)
         await playwright_mcp_client.__aenter__()
         logger.info("Playwright MCP 클라이언트 연결 성공")
+        
+        # AI 서비스의 playwright_mcp_client 업데이트
+        ai_service.playwright_mcp_client = playwright_mcp_client
+        logger.info("AI 서비스에 Playwright MCP 클라이언트 연결됨")
     except Exception as e:
         logger.warning(f"Playwright MCP 클라이언트 연결 실패 (일반 모드로 계속): {e}")
         playwright_mcp_client = None
     
-    # 서비스 인스턴스 초기화 (의존성 있는 것들)
-    ai_service = AIService(gemini_client, playwright_mcp_client, db_helper)
-    thread_service = ThreadService(db_helper, ai_service)
+    logger.info("모든 서비스 인스턴스 초기화 완료")
     
     yield
     
