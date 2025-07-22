@@ -462,11 +462,13 @@ async def set_access_token(request: Request, user=Depends(verify_auth)):
         
         if existing_site:
             # 기존 사이트의 토큰 업데이트
+            print(f"기존 사이트 {site_code}에 대한 액세스 토큰 업데이트")
             success = await db_helper.update_user_site_tokens(user.id, site_code, access_token)
             if not success:
                 raise HTTPException(status_code=500, detail="토큰 업데이트에 실패했습니다.")
         else:
             # 새로운 사이트 생성
+            print(f"새로운 사이트 {site_code}에 대한 액세스 토큰 저장")
             site_data = await db_helper.create_user_site(user.id, site_code, access_token=access_token)
             if not site_data:
                 raise HTTPException(status_code=500, detail="사이트 생성에 실패했습니다.")
