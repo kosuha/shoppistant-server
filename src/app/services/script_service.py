@@ -167,13 +167,10 @@ class ScriptService:
                 logger.info(f"사이트 {site_code}의 스크립트를 DB에서 조회 성공")
                 script_content = script_data.get('script_content', '')
                 
-                # 기존 API 응답 형태에 맞춰서 반환 (footer에만 스크립트)
                 return {
                     "success": True, 
                     "data": {
-                        "header": "",
-                        "body": "", 
-                        "footer": script_content
+                        "script": script_content
                     }
                 }
             else:
@@ -181,9 +178,7 @@ class ScriptService:
                 return {
                     "success": True,
                     "data": {
-                        "header": "",
-                        "body": "",
-                        "footer": ""
+                        "script": ""
                     }
                 }
             
