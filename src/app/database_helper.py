@@ -567,8 +567,15 @@ class DatabaseHelper:
             
             if result.data:
                 domain = result.data[0].get('site_domain', '')
-                logger.info(f"사이트 도메인 조회 성공: site_code={site_code}, domain={domain}")
-                return domain
+                if domain:
+                    # 도메인을 올바른 Origin 형태로 변환
+                    if not domain.startswith(('http://', 'https://')):
+                        domain = f"https://{domain}"
+                    logger.info(f"사이트 도메인 조회 성공: site_code={site_code}, domain={domain}")
+                    return domain
+                else:
+                    logger.info(f"사이트 도메인이 비어있음: site_code={site_code}")
+                    return None
             else:
                 logger.info(f"사이트 도메인 없음: site_code={site_code}")
                 return None
