@@ -45,9 +45,9 @@ class ImwebService:
             logger.error(f"아임웹 API 호출 실패: {e}")
             return {"success": False, "error": str(e)}
 
-    async def update_site_names_from_imweb(self, user_id: str) -> Dict[str, Any]:
+    async def update_site_info_from_imweb(self, user_id: str) -> Dict[str, Any]:
         """
-        사용자의 모든 사이트 정보를 아임웹 API로 조회하여 데이터베이스의 사이트 이름을 업데이트합니다.
+        사용자의 모든 사이트 정보를 아임웹 API로 조회하여 데이터베이스의 사이트 이름과 유닛코드를 업데이트합니다.
         
         Args:
             user_id: 사용자 ID
@@ -67,6 +67,7 @@ class ImwebService:
                 site_code = site.get('site_code')
                 access_token = site.get('access_token')
                 current_site_name = site.get('site_name')
+                current_unit_code = site.get('unit_code')
                 
                 if not site_code or not access_token:
                     update_results.append({
@@ -86,7 +87,9 @@ class ImwebService:
                     site_data = site_info_result["data"]
                     # 아임웹에서 사이트 이름 가져오기 (siteName 또는 title 필드)
                     imweb_site_name = site_data.get('unitList')[0].get('name')
+                    imweb_unit_code = site_data.get('unitList')[0].get('unitCode')
                     
+                    # 사이트 이름 업데이트
                     if imweb_site_name and imweb_site_name != current_site_name:
                         # 데이터베이스 업데이트
                         update_success = await self.db_helper.update_site_name(user_id, site_code, imweb_site_name)
@@ -102,6 +105,19 @@ class ImwebService:
                             "success": True,
                             "message": "사이트 이름이 이미 최신상태입니다."
                         })
+                    
+                    # 유닛 코드 업데이트
+                    if imweb_unit_code and imweb_unit_code != current_unit_code:
+                        unit_update_success = await self.db_helper.update_site_unit_code(user_id, site_code, imweb_unit_code)
+                        if unit_update_success:
+                            logger.info(f"사이트 {site_code}의 유닛 코드를 {current_unit_code} -> {imweb_unit_code}로 업데이트 완료")
+                        else:
+                            logger.warning(f"사이트 {site_code}의 유닛 코드 업데이트 실패")
+                    elif imweb_unit_code == current_unit_code:
+                        logger.info(f"사이트 {site_code}의 유닛 코드가 이미 최신상태입니다: {current_unit_code}")
+                    else:
+                        logger.warning(f"사이트 {site_code}에서 유닛 코드를 찾을 수 없음")
+                    
                 else:
                     update_results.append({
                         "site_code": site_code,

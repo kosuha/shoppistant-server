@@ -53,17 +53,18 @@ class DatabaseHelper:
         """사용자의 연결된 사이트 목록 조회"""
         try:
             # 권한 검증
+            print(f"Fetching user sites for user_id: {user_id}")
             self._verify_user_access(requesting_user_id, user_id)
             
             client = self._get_client(use_admin=True)
             result = client.table('user_sites').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
             return result.data or []
         except Exception as e:
-            logger.error(f"사용자 사이트 조회 실패: {e}")
+            logger.error(f"[SERVICE] 사용자 사이트 조회 실패: {e}")
             return []
     
     async def create_user_site(self, user_id: str, site_code: str, site_name: str = None, 
-                             access_token: str = None, refresh_token: str = None) -> Dict[str, Any]:
+                             access_token: str = None, refresh_token: str = None, unit_code: str = None) -> Dict[str, Any]:
         """새로운 사이트 연결 생성"""
         try:
             site_data = {
@@ -71,7 +72,8 @@ class DatabaseHelper:
                 'site_code': site_code,
                 'site_name': site_name,
                 'access_token': self._encrypt_token(access_token) if access_token else None,
-                'refresh_token': self._encrypt_token(refresh_token) if refresh_token else None
+                'refresh_token': self._encrypt_token(refresh_token) if refresh_token else None,
+                'unit_code': unit_code
             }
             
             client = self._get_client(use_admin=True)
@@ -316,6 +318,24 @@ class DatabaseHelper:
                 return False
         except Exception as e:
             logger.error(f"사이트 이름 업데이트 실패: {e}")
+            return False
+
+    async def update_site_unit_code(self, user_id: str, site_code: str, unit_code: str) -> bool:
+        """사이트 유닛 코드 업데이트"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('user_sites').update({
+                'unit_code': unit_code
+            }).eq('user_id', user_id).eq('site_code', site_code).execute()
+            
+            if result.data:
+                logger.info(f"사이트 {site_code}의 유닛 코드가 '{unit_code}'로 업데이트됨")
+                return True
+            else:
+                logger.warning(f"사이트 {site_code} 유닛 코드 업데이트 실패")
+                return False
+        except Exception as e:
+            logger.error(f"사이트 유닛 코드 업데이트 실패: {e}")
             return False
     
     async def update_thread_title(self, thread_id: str, title: str) -> bool:

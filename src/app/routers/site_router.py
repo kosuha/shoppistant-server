@@ -1,17 +1,18 @@
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from services.imweb_service import ImwebService
 from database_helper import DatabaseHelper
 import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/sites", tags=["sites"])
+security = HTTPBearer()
 
-
-def get_current_user():
-    # 의존성 주입 함수는 main.py에서 설정할 예정
-    pass
-
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """현재 사용자 정보를 가져오는 의존성"""
+    from main import auth_service
+    return await auth_service.verify_auth(credentials)
 
 @router.get("/")
 async def get_user_sites(user=Depends(get_current_user)):
@@ -19,6 +20,7 @@ async def get_user_sites(user=Depends(get_current_user)):
     from main import imweb_service, db_helper
     
     try:
+        print(f"[ROUTER] 사용자 사이트 조회 요청: user={user}")
         user_sites = await db_helper.get_user_sites(user.id, user.id)
         
         # 민감한 정보 제거 (토큰 정보 숨김)
@@ -50,7 +52,7 @@ async def get_user_sites(user=Depends(get_current_user)):
         })
         
     except Exception as e:
-        logger.error(f"사용자 사이트 조회 실패: {e}")
+        logger.error(f"[ROUTER] 사용자 사이트 조회 실패: {e}")
         return JSONResponse(status_code=500, content={
             "status": "error",
             "message": str(e)

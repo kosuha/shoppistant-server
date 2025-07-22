@@ -1,15 +1,17 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from services.thread_service import ThreadService
 import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["threads", "messages"])
+security = HTTPBearer()
 
-
-def get_current_user():
-    # 의존성 주입 함수는 main.py에서 설정할 예정
-    pass
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """현재 사용자 정보를 가져오는 의존성"""
+    from main import auth_service
+    return await auth_service.verify_auth(credentials)
 
 
 # 스레드 관련 엔드포인트들

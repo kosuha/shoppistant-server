@@ -13,6 +13,8 @@ class AuthService:
         self.db_helper = db_helper
 
     async def verify_auth(self, credentials: HTTPAuthorizationCredentials):
+        logger.info("##### CALL FUNCTION: verify_auth")
+        print("##### CALL FUNCTION: verify_auth")  # print도 유지
         """
         JWT 토큰을 검증하여 사용자 정보를 반환합니다.
         
@@ -30,7 +32,7 @@ class AuthService:
             response = self.supabase.auth.get_user(credentials.credentials)
             if response.user is None:
                 raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다.")
-            
+            print(f"Authenticated user: {response.user.id} - {response.user.email}")
             # 프로필 자동 생성/확인 (Service Role로 처리)
             try:
                 profile = await self.db_helper.get_user_profile(response.user.id)

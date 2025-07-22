@@ -10,11 +10,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["authentication"])
 security = HTTPBearer()
 
-
-def get_current_user():
-    # 의존성 주입 함수는 main.py에서 설정할 예정
-    pass
-
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """현재 사용자 정보를 가져오는 의존성"""
+    from main import auth_service
+    return await auth_service.verify_auth(credentials)
 
 @router.post("/tokens")
 async def set_access_token(
@@ -283,7 +282,7 @@ async def get_all_tokens_status(user=Depends(get_current_user)):
         token_statuses = []
         for site in user_sites:
             # 아임웹에서 사이트 이름을 가져와서 업데이트
-            await imweb_service.update_site_names_from_imweb(user.id)
+            await imweb_service.update_site_info_from_imweb(user.id)
 
             token_statuses.append({
                 "site_code": site.get("site_code"),
