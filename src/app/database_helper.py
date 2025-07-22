@@ -380,3 +380,181 @@ class DatabaseHelper:
                 'error': str(e),
                 'timestamp': datetime.now().isoformat()
             }
+    
+    # Site Scripts 관련 함수들
+    async def create_site_script(self, user_id: str, site_code: str, script_content: str) -> Dict[str, Any]:
+        """새로운 사이트 스크립트 생성"""
+        try:
+            # 사용자가 해당 사이트에 접근 권한이 있는지 확인
+            site = await self.get_user_site_by_code(user_id, site_code)
+            if not site:
+                raise PermissionError("사이트에 접근할 권한이 없습니다.")
+            
+            # 기존 활성 스크립트가 있다면 비활성화
+            await self._deactivate_existing_scripts(user_id, site_code)
+            
+            # 새 버전 계산
+            version = await self._get_next_version(user_id, site_code)
+            
+            script_data = {
+                'user_id': user_id,
+                'site_code': site_code,
+                'script_content': script_content,
+                'version': version,
+                'is_active': True
+            }
+            
+            client = self._get_client(use_admin=True)
+            result = client.table('site_scripts').insert(script_data).execute()
+            return result.data[0] if result.data else {}
+        except Exception as e:
+            logger.error(f"사이트 스크립트 생성 실패: {e}")
+            return {}
+    
+    async def update_site_script(self, user_id: str, site_code: str, script_content: str) -> Dict[str, Any]:
+        """사이트 스크립트 업데이트 (새 버전 생성)"""
+        try:
+            # 사용자가 해당 사이트에 접근 권한이 있는지 확인
+            site = await self.get_user_site_by_code(user_id, site_code)
+            if not site:
+                raise PermissionError("사이트에 접근할 권한이 없습니다.")
+            
+            # 현재 활성 스크립트와 동일한 내용인지 확인
+            current_script = await self.get_site_script(user_id, site_code)
+            if current_script and current_script.get('script_content') == script_content:
+                logger.info(f"스크립트 내용이 기존과 동일함: site_code={site_code}")
+                return current_script
+            
+            # 기존 활성 스크립트 비활성화
+            await self._deactivate_existing_scripts(user_id, site_code)
+            
+            # 새 버전 계산
+            version = await self._get_next_version(user_id, site_code)
+            
+            script_data = {
+                'user_id': user_id,
+                'site_code': site_code,
+                'script_content': script_content,
+                'version': version,
+                'is_active': True
+            }
+            
+            client = self._get_client(use_admin=True)
+            result = client.table('site_scripts').insert(script_data).execute()
+            logger.info(f"사이트 스크립트 업데이트 완료: site_code={site_code}, version={version}")
+            return result.data[0] if result.data else {}
+        except Exception as e:
+            logger.error(f"사이트 스크립트 업데이트 실패: {e}")
+            return {}
+    
+    async def get_site_script(self, user_id: str, site_code: str) -> Optional[Dict[str, Any]]:
+        """현재 활성화된 사이트 스크립트 조회"""
+        try:
+            # 사용자가 해당 사이트에 접근 권한이 있는지 확인
+            site = await self.get_user_site_by_code(user_id, site_code)
+            if not site:
+                logger.warning(f"사이트 접근 권한 없음: user_id={user_id}, site_code={site_code}")
+                return None
+            
+            client = self._get_client(use_admin=True)
+            result = client.table('site_scripts').select('*').eq('user_id', user_id).eq('site_code', site_code).eq('is_active', True).execute()
+            
+            if result.data:
+                logger.info(f"활성 스크립트 조회 성공: site_code={site_code}")
+                return result.data[0]
+            else:
+                logger.info(f"활성 스크립트 없음: site_code={site_code}")
+                return None
+        except Exception as e:
+            logger.error(f"사이트 스크립트 조회 실패: {e}")
+            return None
+    
+    async def get_site_script_by_id(self, user_id: str, script_id: str) -> Optional[Dict[str, Any]]:
+        """스크립트 ID로 스크립트 조회"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('site_scripts').select('*').eq('id', script_id).eq('user_id', user_id).execute()
+            
+            if result.data:
+                return result.data[0]
+            return None
+        except Exception as e:
+            logger.error(f"스크립트 ID 조회 실패: {e}")
+            return None
+    
+    async def get_site_script_history(self, user_id: str, site_code: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """사이트 스크립트 버전 히스토리 조회"""
+        try:
+            # 사용자가 해당 사이트에 접근 권한이 있는지 확인
+            site = await self.get_user_site_by_code(user_id, site_code)
+            if not site:
+                return []
+            
+            client = self._get_client(use_admin=True)
+            result = client.table('site_scripts').select('*').eq('user_id', user_id).eq('site_code', site_code).order('version', desc=True).limit(limit).execute()
+            
+            return result.data or []
+        except Exception as e:
+            logger.error(f"사이트 스크립트 히스토리 조회 실패: {e}")
+            return []
+    
+    async def delete_site_script(self, user_id: str, site_code: str) -> bool:
+        """사이트의 활성 스크립트 삭제 (비활성화)"""
+        try:
+            # 사용자가 해당 사이트에 접근 권한이 있는지 확인
+            site = await self.get_user_site_by_code(user_id, site_code)
+            if not site:
+                return False
+            
+            # 모든 스크립트 비활성화
+            await self._deactivate_existing_scripts(user_id, site_code)
+            logger.info(f"사이트 스크립트 삭제 완료: site_code={site_code}")
+            return True
+        except Exception as e:
+            logger.error(f"사이트 스크립트 삭제 실패: {e}")
+            return False
+    
+    async def _deactivate_existing_scripts(self, user_id: str, site_code: str) -> bool:
+        """기존 활성 스크립트들을 비활성화"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('site_scripts').update({
+                'is_active': False,
+                'updated_at': datetime.now().isoformat()
+            }).eq('user_id', user_id).eq('site_code', site_code).eq('is_active', True).execute()
+            
+            logger.info(f"기존 활성 스크립트 비활성화 완료: site_code={site_code}, count={len(result.data) if result.data else 0}")
+            return True
+        except Exception as e:
+            logger.error(f"기존 스크립트 비활성화 실패: {e}")
+            return False
+    
+    async def _get_next_version(self, user_id: str, site_code: str) -> int:
+        """다음 스크립트 버전 번호 계산"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('site_scripts').select('version').eq('user_id', user_id).eq('site_code', site_code).order('version', desc=True).limit(1).execute()
+            
+            if result.data:
+                return result.data[0]['version'] + 1
+            else:
+                return 1
+        except Exception as e:
+            logger.error(f"다음 버전 계산 실패: {e}")
+            return 1
+    
+    async def get_site_script_by_code_public(self, site_code: str) -> Optional[Dict[str, Any]]:
+        """사이트 코드로 활성 스크립트 조회 (공개 접근용, 인증 불필요)"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('site_scripts').select('*').eq('site_code', site_code).eq('is_active', True).execute()
+            
+            if result.data:
+                logger.info(f"공개 스크립트 조회 성공: site_code={site_code}")
+                return result.data[0]
+            else:
+                logger.info(f"공개 스크립트 없음: site_code={site_code}")
+                return None
+        except Exception as e:
+            logger.error(f"공개 사이트 스크립트 조회 실패: {e}")
+            return None

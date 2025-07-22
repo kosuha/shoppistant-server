@@ -203,6 +203,7 @@ async def api_status():
 app.include_router(auth_router.router)
 app.include_router(site_router.router)
 app.include_router(script_router.router)
+app.include_router(script_router.module_router)  # 스크립트 모듈 제공용 라우터 (인증 불필요)
 app.include_router(thread_router.router)
 
 if __name__ == "__main__":

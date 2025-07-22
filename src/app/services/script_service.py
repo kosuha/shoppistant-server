@@ -95,7 +95,7 @@ class ScriptService:
             return {"success": False, "error": str(e)}
 
     async def deploy_script_to_imweb(self, access_token: str, unit_code: str, position: str, script_content: str = None, method: str = "PUT") -> Dict[str, Any]:
-        print(f"[SCRIPT SERVICE] deploy_script_to_imweb 호출: script_content={script_content[:50]}...")
+        print(f"[SCRIPT SERVICE] deploy_script_to_imweb 호출: script_content={script_content}...")
         """
         아임웹 API를 통해 스크립트를 배포합니다.
         
@@ -150,7 +150,7 @@ class ScriptService:
     async def get_site_scripts(self, user_id: str, site_code: str) -> Dict[str, Any]:
         print(f"[SERVICE] get_site_scripts 스크립트 조회 요청: user_id={user_id}, site_code={site_code}")
         """
-        특정 사이트의 현재 스크립트를 조회합니다.
+        특정 사이트의 현재 스크립트를 데이터베이스에서 조회합니다.
         
         Args:
             user_id: 사용자 ID
@@ -160,41 +160,32 @@ class ScriptService:
             Dict: 스크립트 조회 결과
         """
         try:
-            # 사용자가 해당 사이트에 접근 권한이 있는지 확인
-            site = await self.db_helper.get_user_site_by_code(user_id, site_code)
-            if not site:
-                logger.error(f"사용자 {user_id}가 사이트 {site_code}에 접근할 수 없습니다.")
-                return {"success": False, "error": "사이트를 찾을 수 없거나 접근 권한이 없습니다.", "status_code": 404}
+            # 데이터베이스에서 활성 스크립트 조회
+            script_data = await self.db_helper.get_site_script(user_id, site_code)
             
-            # 액세스 토큰 확인
-            access_token = site.get('access_token')
-            if not access_token:
-                logger.error(f"사이트 {site_code}의 API 토큰이 설정되지 않았습니다.")
-                return {"success": False, "error": "사이트의 API 토큰이 설정되지 않았습니다.", "status_code": 400}
-            
-            # 사이트 유닛 코드 확인
-            unit_code = site.get('unit_code')
-            if not unit_code:
-                logger.error(f"사이트 {site_code}의 유닛 코드가 설정되지 않았습니다.")
-                return {"success": False, "error": "사이트의 유닛 코드가 설정되지 않았습니다.", "status_code": 400}
-            
-            # 토큰 복호화
-            decrypted_token = self.db_helper._decrypt_token(access_token)
-            
-            # 아임웹 API로 스크립트 조회
-            script_result = await self.get_scripts_from_imweb(decrypted_token, unit_code)
-            print(f"[SERVICE] 스크립트 조회 결과: {script_result}")
-            if not script_result["success"]:
-                return {"success": False, "error": f"스크립트 조회 실패: {script_result['error']}", "status_code": 500}
-            
-            # 로그 기록
-            await self.db_helper.log_system_event(
-                user_id=user_id,
-                event_type='script_retrieved',
-                event_data={'site_code': site_code, 'action': 'get_scripts'}
-            )
-            
-            return {"success": True, "data": script_result["data"]}
+            if script_data:
+                logger.info(f"사이트 {site_code}의 스크립트를 DB에서 조회 성공")
+                script_content = script_data.get('script_content', '')
+                
+                # 기존 API 응답 형태에 맞춰서 반환 (footer에만 스크립트)
+                return {
+                    "success": True, 
+                    "data": {
+                        "header": "",
+                        "body": "", 
+                        "footer": script_content
+                    }
+                }
+            else:
+                logger.debug(f"사이트 {site_code}의 활성 스크립트가 없음")
+                return {
+                    "success": True,
+                    "data": {
+                        "header": "",
+                        "body": "",
+                        "footer": ""
+                    }
+                }
             
         except Exception as e:
             logger.error(f"스크립트 조회 실패: {e}")
@@ -202,12 +193,12 @@ class ScriptService:
 
     async def deploy_site_scripts(self, user_id: str, site_code: str, scripts_data: Dict[str, str]) -> Dict[str, Any]:
         """
-        특정 사이트에 스크립트를 배포합니다.
+        특정 사이트에 스크립트를 배포합니다. (DB 저장 + 아임웹 footer에 모듈 스크립트 배포)
         
         Args:
             user_id: 사용자 ID
             site_code: 사이트 ID (사이트 코드)
-            scripts_data: 배포할 스크립트 데이터 (header, body, footer)
+            scripts_data: 배포할 스크립트 데이터
             
         Returns:
             Dict: 스크립트 배포 결과
@@ -223,92 +214,71 @@ class ScriptService:
             if not access_token:
                 return {"success": False, "error": "사이트의 API 토큰이 설정되지 않았습니다.", "status_code": 400}
             
-            # 스크립트 데이터 추출 및 검증
-            scripts_to_deploy = {}
-            scripts_to_delete = []
-            
-            for position in ["header", "body", "footer"]:
-                script_content = scripts_data.get(position)
-                
-                # 스크립트 내용이 있는 경우
-                if script_content and script_content.strip():
-                    # 스크립트 검증
-                    validation_result = self.validate_script_content(script_content)
-                    if not validation_result.is_valid:
-                        error_messages = [err.message for err in validation_result.errors]
-                        return {
-                            "success": False,
-                            "error": f"{position} 스크립트 검증 실패: {'; '.join(error_messages)}",
-                            "status_code": 400
-                        }
-                    scripts_to_deploy[position] = script_content
-                # 스크립트 내용이 빈 문자열이거나 None인 경우 (명시적으로 삭제 요청)
-                elif position in scripts_data:
-                    scripts_to_delete.append(position)
-            
-            if not scripts_to_deploy and not scripts_to_delete:
-                return {"success": False, "error": "배포하거나 삭제할 스크립트가 없습니다.", "status_code": 400}
-            
             # 사이트 유닛 코드 확인
             unit_code = site.get('unit_code')
             if not unit_code:
                 return {"success": False, "error": "사이트의 유닛 코드가 설정되지 않았습니다.", "status_code": 400}
             
-            # 토큰 복호화
+            # 스크립트가 비어있으면 삭제
+            if not scripts_data:
+                # DB에서 기존 스크립트 삭제 (비활성화)
+                await self.db_helper.delete_site_script(user_id, site_code)
+                
+                # 아임웹에서도 footer 스크립트 삭제
+                decrypted_token = self.db_helper._decrypt_token(access_token)
+                await self.deploy_script_to_imweb(decrypted_token, unit_code, "footer", method="DELETE")
+                
+                from datetime import datetime
+                deployed_at = datetime.now().isoformat() + "Z"
+                
+                return {
+                    "success": True,
+                    "data": {
+                        "deployed_at": deployed_at,
+                        "site_code": site_code,
+                        "deployed_scripts": {"header": "", "body": "", "footer": ""}
+                    },
+                    "message": "스크립트가 삭제되었습니다."
+                }
+            
+            # 스크립트 검증
+            validation_result = self.validate_script_content(scripts_data.get("script", ""))
+            if not validation_result.is_valid:
+                error_messages = [err.message for err in validation_result.errors]
+                return {
+                    "success": False,
+                    "error": f"스크립트 검증 실패: {'; '.join(error_messages)}",
+                    "status_code": 400
+                }
+            
+            # 1단계: DB에 스크립트 저장
+            script_record = await self.db_helper.update_site_script(user_id, site_code, scripts_data.get("script", ""))
+            if not script_record:
+                return {"success": False, "error": "스크립트 데이터베이스 저장 실패", "status_code": 500}
+            
+            # 2단계: 아임웹 footer에 모듈 스크립트 배포
+            import os
+            server_base_url = os.getenv("SERVER_BASE_URL", "http://localhost:8000")
+            module_script = f"<script>document.head.appendChild(Object.assign(document.createElement('script'),{{'src':'{server_base_url}/api/v1/sites/{site_code}/script','type':'module'}}))</script>"
+            
             decrypted_token = self.db_helper._decrypt_token(access_token)
             
-            # 각 위치별로 스크립트 배포
-            deployment_results = {}
+            # 먼저 PUT으로 기존 스크립트 수정 시도
+            deploy_result = await self.deploy_script_to_imweb(
+                decrypted_token, unit_code, "footer", module_script, method="PUT"
+            )
             
-            # 스크립트 삭제 처리
-            for position in scripts_to_delete:
-                try:
-                    delete_result = await self.deploy_script_to_imweb(
-                        decrypted_token, unit_code, position, method="DELETE"
-                    )
-                    
-                    if delete_result["success"]:
-                        deployment_results[position] = ""  # 삭제된 것을 빈 문자열로 표시
-                        logger.info(f"스크립트 삭제 성공: {site_code} - {position}")
-                    else:
-                        logger.warning(f"스크립트 삭제 실패 (무시): {site_code} - {position}: {delete_result.get('error', '알 수 없는 오류')}")
-                        # 삭제 실패는 스크립트가 원래 없었을 수도 있으므로 에러로 처리하지 않음
-                        deployment_results[position] = ""
-                        
-                except Exception as delete_error:
-                    logger.warning(f"{position} 스크립트 삭제 실패 (무시): {delete_error}")
-                    # 삭제 실패는 에러로 처리하지 않음
-                    deployment_results[position] = ""
-            
-            # 스크립트 배포 처리
-            for position, script_content in scripts_to_deploy.items():
-                try:
-                    # 먼저 PUT으로 기존 스크립트 수정 시도
-                    deploy_result = await self.deploy_script_to_imweb(
-                        decrypted_token, unit_code, position, script_content, method="PUT"
-                    )
-                    
-                    if not deploy_result["success"]:
-                        # PUT 실패시 POST로 새로운 스크립트 생성 시도
-                        deploy_result = await self.deploy_script_to_imweb(
-                            decrypted_token, unit_code, position, script_content, method="POST"
-                        )
-                        
-                        if not deploy_result["success"]:
-                            return {
-                                "success": False,
-                                "error": f"{position} 스크립트 배포 실패: {deploy_result.get('error', '알 수 없는 오류')}",
-                                "status_code": 500
-                            }
-                    
-                    deployment_results[position] = script_content
-                    logger.info(f"스크립트 배포 성공: {site_code} - {position}")
-                    
-                except Exception as deploy_error:
-                    logger.error(f"{position} 스크립트 배포 실패: {deploy_error}")
+            if not deploy_result["success"]:
+                # PUT 실패시 POST로 새로운 스크립트 생성 시도
+                deploy_result = await self.deploy_script_to_imweb(
+                    decrypted_token, unit_code, "footer", module_script, method="POST"
+                )
+                
+                if not deploy_result["success"]:
+                    logger.error(f"아임웹 모듈 스크립트 배포 실패: {deploy_result.get('error', '알 수 없는 오류')}")
                     return {
                         "success": False,
-                        "error": f"{position} 스크립트 배포 실패: {str(deploy_error)}",
+                        "error": f"아임웹 스크립트 배포 실패: {deploy_result.get('error', '알 수 없는 오류')}",
                         "status_code": 500
                     }
             
@@ -321,10 +291,10 @@ class ScriptService:
                 event_type='script_deployed',
                 event_data={
                     'site_code': site_code,
-                    'action': 'deploy_scripts',
-                    'deployed_positions': list(scripts_to_deploy.keys()),
-                    'deleted_positions': scripts_to_delete,
-                    'deployed_at': deployed_at
+                    'action': 'deploy_script_with_module',
+                    'script_version': script_record.get('version'),
+                    'deployed_at': deployed_at,
+                    'module_url': f"{server_base_url}/api/v1/sites/{site_code}/script"
                 }
             )
             
@@ -333,9 +303,13 @@ class ScriptService:
                 "data": {
                     "deployed_at": deployed_at,
                     "site_code": site_code,
-                    "deployed_scripts": deployment_results
+                    "script_version": script_record.get('version'),
+                    "module_url": f"{server_base_url}/api/v1/sites/{site_code}/script",
+                    "deployed_scripts": {
+                        "script": script_record.get('script_content', ''),
+                    }
                 },
-                "message": f"{len(scripts_to_deploy)}개 스크립트 배포, {len(scripts_to_delete)}개 스크립트 삭제가 완료되었습니다."
+                "message": "스크립트가 데이터베이스에 저장되고 아임웹에 모듈 형태로 배포되었습니다."
             }
             
         except Exception as e:

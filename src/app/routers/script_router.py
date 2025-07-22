@@ -69,3 +69,45 @@ async def deploy_site_scripts(site_code: str, request: Request, user=Depends(get
             "status": "error",
             "message": str(e)
         })
+
+
+# 별도 라우터: 스크립트 모듈 제공용 (인증 불필요)
+module_router = APIRouter(prefix="/sites/{site_code}", tags=["script-module"])
+
+@module_router.get("/script", response_class=None)
+async def get_site_script_module(site_code: str):
+    """특정 사이트의 스크립트를 모듈 형태로 제공하는 API (인증 불필요)"""
+    from main import script_service
+    from fastapi.responses import Response
+    
+    try:
+        # 사이트 코드로 스크립트 조회 (공개 접근)
+        script_data = await script_service.db_helper.get_site_script_by_code_public(site_code)
+        
+        if not script_data:
+            # 스크립트가 없으면 빈 스크립트 반환
+            script_content = "// No active script found for this site"
+        else:
+            script_content = script_data.get('script_content', '// Empty script')
+        
+        # Content-Type을 application/javascript로 설정
+        return Response(
+            content=script_content,
+            media_type="application/javascript",
+            headers={
+                "Cache-Control": "public, max-age=300",  # 5분간 캐시
+                "Access-Control-Allow-Origin": "*",  # CORS 허용
+                "Access-Control-Allow-Methods": "GET",
+                "Access-Control-Allow-Headers": "*"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"스크립트 모듈 제공 API 실패: {e}")
+        # 에러 상황에서도 유효한 JavaScript 반환
+        error_script = f"// Script loading error: {str(e)}\nconsole.error('Script loading failed: {str(e)}');"
+        return Response(
+            content=error_script,
+            media_type="application/javascript",
+            status_code=200  # 스크립트 로딩 에러를 방지하기 위해 200 반환
+        )
