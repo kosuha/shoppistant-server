@@ -207,6 +207,7 @@ class ThreadService:
             return {"success": False, "error": str(e), "status_code": 500}
 
     async def create_message(self, user_id: str, thread_id: str, message: str, message_type: str = "user", metadata: Optional[str] = None) -> Dict[str, Any]:
+        print(f"[THREAD SERVICE] create_message 메시지 생성 요청: user={user_id}, thread={thread_id}, type={message_type} message={message[:50]} metadata={metadata}")
         """
         새로운 메시지를 생성합니다.
         사용자가 메시지를 보내면 자동으로 AI 응답을 생성하여 저장합니다.
@@ -228,16 +229,22 @@ class ThreadService:
             # 메시지 길이 제한 (2000자)
             message = message[:2000]
 
+            print(f"[THREAD SERVICE] create_message 메시지 내용: {message[:50]}...")  # 메시지 내용 미리보기
+
             # 스레드가 존재하고 사용자 소유인지 확인
             thread = await self.db_helper.get_thread_by_id(user_id, thread_id)
             if not thread:
                 return {"success": False, "error": "스레드를 찾을 수 없습니다.", "status_code": 404}
+
+            print(f"[THREAD SERVICE] 스레드 소유확인")
 
             # 1. 중복 메시지 검사
             if message_type == "user":
                 is_duplicate = await self.db_helper.check_duplicate_message(user_id, thread_id, message, message_type)
                 if is_duplicate:
                     return {"success": False, "error": "중복 메시지입니다. 잠시 후 다시 시도해주세요.", "status_code": 409}
+
+            print(f"[THREAD SERVICE] 메시지 중복확인")
 
             # 스레드의 첫 메시지인 경우, 스레드의 title을 메시지로 설정
             if not thread.get('title'):
@@ -248,6 +255,8 @@ class ThreadService:
                 except Exception as title_error:
                     logger.error(f"스레드 제목 업데이트 실패: {title_error}")
 
+            print(f"[THREAD SERVICE] 스레드 제목 업데이트: {thread.get('title')}")
+
             # 2. 사용자 메시지 저장
             user_message = await self.db_helper.create_message(
                 requesting_user_id=user_id,
@@ -256,6 +265,7 @@ class ThreadService:
                 message_type=message_type,
                 metadata=metadata
             )
+            print(f"[THREAD SERVICE] 사용자 메시지 저장 완료: {user_message}")
             
             if not user_message:
                 return {"success": False, "error": "메시지 저장에 실패했습니다.", "status_code": 500}
@@ -268,7 +278,17 @@ class ThreadService:
                     chat_history = await self.db_helper.get_thread_messages(user_id, thread_id)
                     
                     # AI 응답 생성 (메타데이터 포함)
-                    ai_response, ai_metadata = await self.ai_service.generate_gemini_response(chat_history, user_id, metadata)
+                    ai_response_result = await self.ai_service.generate_gemini_response(chat_history, user_id, metadata)
+                    
+                    # AI 응답 결과 검증
+                    if ai_response_result is None:
+                        raise ValueError("AI 서비스에서 None을 반환했습니다.")
+                    
+                    # 튜플 언패킹
+                    if isinstance(ai_response_result, tuple) and len(ai_response_result) == 2:
+                        ai_response, ai_metadata = ai_response_result
+                    else:
+                        raise ValueError(f"AI 서비스에서 예상치 못한 형태의 응답을 받았습니다: {type(ai_response_result)}")
                     
                     # AI 메타데이터를 JSON 문자열로 변환
                     ai_metadata_json = None

@@ -214,7 +214,7 @@ async def create_message(
     thread_service: ThreadService = Depends(get_thread_service)
 ):
     """새로운 메시지를 생성하는 API"""
-    
+    print(f"[ROUTER] create_message 메시지 생성 요청: user={user.id}")
     try:
         request_data = await request.json()
         thread_id = request_data.get("thread_id")

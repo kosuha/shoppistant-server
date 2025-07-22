@@ -95,6 +95,7 @@ class ScriptService:
             return {"success": False, "error": str(e)}
 
     async def deploy_script_to_imweb(self, access_token: str, unit_code: str, position: str, script_content: str = None, method: str = "PUT") -> Dict[str, Any]:
+        print(f"[SCRIPT SERVICE] deploy_script_to_imweb 호출: script_content={script_content[:50]}...")
         """
         아임웹 API를 통해 스크립트를 배포합니다.
         

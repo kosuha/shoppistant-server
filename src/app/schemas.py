@@ -16,7 +16,7 @@ class ScriptContent(BaseModel):
     """개별 스크립트 내용을 나타내는 모델"""
     content: Optional[str] = Field(
         None, 
-        description="스크립트 내용. <script> 태그를 포함한 전체 스크립트"
+        description="스크립트 내용. <script> 태그로 감싸인 전체 스크립트"
     )
     description: Optional[str] = Field(
         None,
@@ -36,18 +36,6 @@ class ScriptUpdate(BaseModel):
     footer: Optional[ScriptContent] = Field(
         None,
         description="푸터 스크립트 업데이트 내용"
-    )
-    explanation: str = Field(
-        ...,
-        description="수정 내용에 대한 상세 설명"
-    )
-    requires_deployment: bool = Field(
-        ...,
-        description="실제 사이트에 배포가 필요한지 여부"
-    )
-    action_type: str = Field(
-        ...,
-        description="수행된 작업 유형 (create, update, delete, view 등)"
     )
 
 class CurrentScripts(BaseModel):
@@ -86,10 +74,6 @@ class AIScriptResponse(BaseModel):
     script_updates: Optional[ScriptUpdate] = Field(
         None,
         description="스크립트 수정이 필요한 경우의 업데이트 정보"
-    )
-    requires_user_confirmation: bool = Field(
-        False,
-        description="사용자 확인이 필요한지 여부"
     )
 
 class ScriptValidationError(BaseModel):
