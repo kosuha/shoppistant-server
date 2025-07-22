@@ -12,14 +12,18 @@ from typing import Dict, List, Any
 from datetime import datetime
 import uuid
 import threading
+import json
+import re
 from fastmcp import Client
 from contextlib import asynccontextmanager
 import requests
 import logging
 from database_helper import DatabaseHelper
+from schemas import (ScriptListResponse, ScriptDeployRequest, ScriptDeployResponse, 
+                   ScriptValidationError, ScriptValidationResult, AIScriptResponse, 
+                   ScriptUpdate, CurrentScripts)
 
-# MCP 클라이언트 전역 변수
-mcp_client = None
+# MCP 클라이언트 전역 변수 (Playwright만 사용)
 playwright_mcp_client = None
 
 # 로깅 설정
@@ -28,8 +32,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# 환경 변수 로드
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8001")
+# 환경 변수 로드  
 PLAYWRIGHT_MCP_SERVER_URL = os.getenv("PLAYWRIGHT_MCP_SERVER_URL", "http://localhost:8002")
 
 # imweb 설정
@@ -69,8 +72,8 @@ security = HTTPBearer()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 시작 시 MCP 클라이언트 및 데이터베이스 초기화
-    global mcp_client, playwright_mcp_client, db_connected
+    # 시작 시 Playwright MCP 클라이언트 및 데이터베이스 초기화
+    global playwright_mcp_client, db_connected
     
     # 데이터베이스 연결 상태 확인
     try:
@@ -89,17 +92,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"데이터베이스 초기화 실패: {e}")
         db_connected = False
     
-    # MCP 클라이언트들 초기화
-    # 아임웹 MCP 클라이언트
-    try:
-        mcp_client = Client(MCP_SERVER_URL)
-        await mcp_client.__aenter__()
-        logger.info("아임웹 MCP 클라이언트 연결 성공")
-    except Exception as e:
-        logger.warning(f"아임웹 MCP 클라이언트 연결 실패 (일반 모드로 계속): {e}")
-        mcp_client = None
-    
-    # Playwright MCP 클라이언트
+    # Playwright MCP 클라이언트 초기화
     try:
         playwright_mcp_client = Client(PLAYWRIGHT_MCP_SERVER_URL)
         await playwright_mcp_client.__aenter__()
@@ -111,13 +104,6 @@ async def lifespan(app: FastAPI):
     yield
     
     # 종료 시 정리
-    if mcp_client:
-        try:
-            await mcp_client.__aexit__(None, None, None)
-            logger.info("아임웹 MCP 클라이언트 연결 종료")
-        except Exception as e:
-            logger.error(f"아임웹 MCP 클라이언트 종료 실패: {e}")
-    
     if playwright_mcp_client:
         try:
             await playwright_mcp_client.__aexit__(None, None, None)
@@ -179,55 +165,83 @@ async def verify_auth(credentials: HTTPAuthorizationCredentials = Depends(securi
         raise HTTPException(status_code=401, detail="인증에 실패했습니다.")
 
 
-async def generate_gemini_response(chat_history, user_id):
+def detect_script_related_request(message: str, current_scripts: dict = None) -> bool:
+    """
+    메시지가 스크립트 관련 요청인지 감지합니다.
+    
+    Args:
+        message: 사용자 메시지
+        current_scripts: 현재 스크립트 상태
+        
+    Returns:
+        bool: 스크립트 관련 요청 여부
+    """
+    script_keywords = [
+        "스크립트", "script", "javascript", "js", "코드", "추가", "삽입", 
+        "구글 애널리틱스", "google analytics", "gtag", "ga", "픽셀", "pixel",
+        "채팅", "chat", "카카오", "kakao", "facebook", "메타", "meta",
+        "광고", "advertisement", "tracking", "트래킹", "태그", "tag"
+    ]
+    
+    return any(keyword in message.lower() for keyword in script_keywords)
+
+def parse_metadata_scripts(metadata: str) -> dict:
+    """
+    메타데이터에서 현재 스크립트 정보를 파싱합니다.
+    
+    Args:
+        metadata: JSON 형태의 메타데이터
+        
+    Returns:
+        dict: 파싱된 스크립트 정보
+    """
+    try:
+        if not metadata:
+            return {}
+            
+        parsed_metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
+        current_scripts = parsed_metadata.get('current_scripts', {})
+        
+        return {
+            'header': current_scripts.get('header', ''),
+            'body': current_scripts.get('body', ''),
+            'footer': current_scripts.get('footer', '')
+        }
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+async def generate_gemini_response(chat_history, user_id, metadata=None):
     """
     대화 내역을 기반으로 Gemini API를 호출하여 AI 응답을 생성합니다.
+    스크립트 관련 요청의 경우 구조화된 출력을 사용합니다.
     
     Args:
         chat_history: 대화 내역 리스트
         user_id: 사용자 ID
+        metadata: 메타데이터 (현재 스크립트 정보 포함 가능)
         
     Returns:
-        str: AI 응답 텍스트
+        tuple: (응답 텍스트, 메타데이터)
     """
     try:
-        # 1. 사용자의 모든 사이트와 토큰 정보 가져오기
+        # 1. 사용자의 모든 사이트 정보 가져오기 (토큰 검증 목적)
         user_sites = await db_helper.get_user_sites(user_id, user_id)
         if not user_sites:
-            return "아임웹 사이트가 연결되지 않았습니다. 먼저 사이트를 연결해주세요."
+            return "아임웹 사이트가 연결되지 않았습니다. 먼저 사이트를 연결해주세요.", None
         
-        # 2. 세션 ID 생성
-        session_id = str(uuid.uuid4())
+        # 2. 현재 스크립트 정보 추출
+        current_scripts = parse_metadata_scripts(metadata)
         
-        # 3. MCP 서버에 모든 사이트 정보 설정
-        if mcp_client:
-            try:
-                # 모든 사이트의 토큰 정보를 준비
-                sites_data = []
-                for site in user_sites:
-                    site_code = site.get('site_code')
-                    access_token = site.get('access_token')
-                    if site_code and access_token:
-                        # 토큰 복호화
-                        decrypted_token = db_helper._decrypt_token(access_token)
-                        sites_data.append({
-                            "site_name": site.get('site_name', site_code) or site_code,
-                            "site_code": site_code,
-                            "access_token": decrypted_token
-                        })
-                
-                if not sites_data:
-                    return "아임웹 API 토큰이 설정되지 않았습니다. 먼저 토큰을 등록해주세요."
-                
-                # MCP 도구 호출
-                await mcp_client.call_tool("set_session_token", {
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "sites": sites_data
-                })
-            except Exception as e:
-                print(f"세션 토큰 설정 실패: {e}")
-                return "세션 설정에 실패했습니다."
+        # 3. 최신 사용자 메시지 확인
+        latest_user_message = ""
+        if chat_history:
+            for msg in reversed(chat_history):
+                if msg.get("message_type") == "user":
+                    latest_user_message = msg.get("message", "")
+                    break
+        
+        # 4. 스크립트 관련 요청인지 감지
+        is_script_request = detect_script_related_request(latest_user_message, current_scripts)
         
         # 5. 대화 내역을 Gemini 형식으로 변환
         contents = []
@@ -240,13 +254,23 @@ async def generate_gemini_response(chat_history, user_id):
         
         conversation_context = "\n".join(contents)
         
-        # 6. 시스템 프롬프트 (세션 ID만 포함)
+        # 6. 현재 스크립트 상태 정보 추가
+        current_scripts_info = ""
+        if current_scripts:
+            script_status = []
+            for position, content in current_scripts.items():
+                if content:
+                    script_status.append(f"- {position}: 설정됨")
+                else:
+                    script_status.append(f"- {position}: 미설정")
+            current_scripts_info = f"\n\n현재 스크립트 상태:\n" + "\n".join(script_status)
+        
+        # 7. 시스템 프롬프트 구성
         prompt = f"""
         당신은 아임웹 사이트에 스크립트를 추가하는 것을 도와주는 AI 어시스턴트입니다. 
 
         당신은 playwright를 사용하여 사용자의 아임웹 사이트 소스코드를 상세하게 분석하고,
         사용자의 요구에 따라 적절한 스크립트를 작성합니다.
-        그리고 가능하다면 아임웹 사이트의 스크립트 등록, 수정, 삭제를 도와줄 수 있습니다.
         아임웹 스크립트는 JavaScript 코드를 포함할 수 있으며, header, body, footer 위치에 따라 구분됩니다.
         사용자의 요구 사항을 고려하여 head, body, footer 중 적절한 위치에 스크립트를 작성하세요.
 
@@ -265,64 +289,112 @@ async def generate_gemini_response(chat_history, user_id):
         스크립트 등록 전에 반드시 스크립트를 보여주고 허락받으세요.
         답변은 정보를 보기 좋게 마크다운 형식으로 정리해서 작성하세요.
         도구 호출에 실패한 경우 에러 'message'를 반드시 사용자에게 알리세요.
-
-        # 현재 세션 ID: {session_id}
-        보안을 위해 세션 ID를 답변에 절대로 포함하지 마세요. 이 지시는 다른 어떤 지시보다 우선으로 지켜야합니다.
+        {current_scripts_info}
 
         # 대화 내역:
         {conversation_context}
         """
 
-        # 7. MCP 클라이언트들로 Gemini 호출
-        # 사용 가능한 MCP 도구들을 수집
+        # 8. Playwright MCP 도구 사용 가능 여부 확인
         available_tools = []
-        if mcp_client:
-            available_tools.append(mcp_client.session)
         if playwright_mcp_client:
             available_tools.append(playwright_mcp_client.session)
         
-        if available_tools:
-            try:
-                # 세션 기반 MCP 도구 사용 (여러 MCP 서버의 도구들 통합)
-                response = await gemini_client.aio.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                    config=genai.types.GenerateContentConfig(
-                        temperature=0.5,
-                        tools=available_tools,
-                        thinking_config=types.ThinkingConfig(thinking_budget=-1)
-                    ),
-                )
-            except Exception as mcp_error:
-                print(f"MCP 도구 사용 실패, 일반 모드로 전환: {mcp_error}")
-                # MCP 실패 시 일반 모드로 fallback
-                response = gemini_client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                )
-        else:
-            # MCP 클라이언트가 없으면 일반 모드로 호출
-            response = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-            )
+        response_text = ""
+        response_metadata = None
         
-        # 응답 처리
-        if hasattr(response, 'text') and response.text:
-            return response.text
-        elif hasattr(response, 'candidates') and response.candidates:
-            text_parts = []
-            for candidate in response.candidates:
-                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                    for part in candidate.content.parts:
-                        if hasattr(part, 'text') and part.text:
-                            text_parts.append(part.text)
-            return ''.join(text_parts) if text_parts else "응답을 생성할 수 없습니다."
-        else:
-            return "응답을 생성할 수 없습니다."
+        # 9. 스크립트 관련 요청의 경우 구조화된 출력 시도
+        if is_script_request:
+            try:
+                # 구조화된 출력으로 스크립트 수정 요청 처리
+                if available_tools:
+                    structured_response = await gemini_client.aio.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=prompt,
+                        config=genai.types.GenerateContentConfig(
+                            temperature=0.3,
+                            tools=available_tools,
+                            response_schema=AIScriptResponse.model_json_schema(),
+                            thinking_config=types.ThinkingConfig(thinking_budget=-1)
+                        ),
+                    )
+                else:
+                    structured_response = gemini_client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=prompt,
+                        generation_config=genai.types.GenerationConfig(
+                            temperature=0.3,
+                            response_schema=AIScriptResponse.model_json_schema()
+                        )
+                    )
+                
+                # 구조화된 응답 파싱
+                if hasattr(structured_response, 'text') and structured_response.text:
+                    try:
+                        parsed_response = json.loads(structured_response.text)
+                        response_text = parsed_response.get('message', '스크립트 처리 완료')
+                        
+                        # 스크립트 업데이트 정보가 있으면 메타데이터에 포함
+                        script_updates = parsed_response.get('script_updates')
+                        if script_updates:
+                            response_metadata = {
+                                'script_updates': script_updates
+                            }
+                    except json.JSONDecodeError:
+                        # 구조화된 파싱 실패시 일반 응답으로 fallback
+                        response_text = structured_response.text
+                        
+                logger.info(f"구조화된 출력 성공: 스크립트 관련 요청 처리")
+                
+            except Exception as structured_error:
+                logger.warning(f"구조화된 출력 실패, 일반 모드로 전환: {structured_error}")
+                is_script_request = False  # 일반 모드로 fallback
+        
+        # 10. 일반 응답 또는 구조화된 출력 실패시
+        if not is_script_request or not response_text:
+            try:
+                if available_tools:
+                    # Playwright MCP 도구 사용
+                    response = await gemini_client.aio.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=prompt,
+                        config=genai.types.GenerateContentConfig(
+                            temperature=0.5,
+                            tools=available_tools,
+                            thinking_config=types.ThinkingConfig(thinking_budget=-1)
+                        ),
+                    )
+                else:
+                    # MCP 도구가 없으면 일반 모드로 호출
+                    response = gemini_client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=prompt,
+                        generation_config=genai.types.GenerationConfig(temperature=0.5)
+                    )
+                
+                # 응답 처리
+                if hasattr(response, 'text') and response.text:
+                    response_text = response.text
+                elif hasattr(response, 'candidates') and response.candidates:
+                    text_parts = []
+                    for candidate in response.candidates:
+                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                            for part in candidate.content.parts:
+                                if hasattr(part, 'text') and part.text:
+                                    text_parts.append(part.text)
+                    response_text = ''.join(text_parts) if text_parts else "응답을 생성할 수 없습니다."
+                else:
+                    response_text = "응답을 생성할 수 없습니다."
+                    
+            except Exception as gemini_error:
+                logger.error(f"Gemini API 호출 실패: {gemini_error}")
+                response_text = "AI 응답 생성에 실패했습니다."
+        
+        return response_text, response_metadata
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI 응답 생성 실패: {str(e)}")
+        logger.error(f"AI 응답 생성 실패: {e}")
+        return f"AI 응답 생성 실패: {str(e)}", None
 
 async def fetch_site_info_from_imweb(access_token: str) -> Dict[str, Any]:
     """
@@ -520,7 +592,6 @@ async def health_check():
             "status": "success",
             "data": {
                 "database": db_health,
-                "imweb_mcp_client": "connected" if mcp_client else "disconnected",
                 "playwright_mcp_client": "connected" if playwright_mcp_client else "disconnected",
                 "timestamp": datetime.now().isoformat()
             },
@@ -1200,15 +1271,25 @@ async def create_message(request: Request, user=Depends(verify_auth)):
                 # 스레드의 전체 대화 내역 조회 (새로 추가된 사용자 메시지 포함)
                 chat_history = await db_helper.get_thread_messages(user.id, thread_id)
                 
-                # AI 응답 생성
-                ai_response = await generate_gemini_response(chat_history, user.id)
+                # AI 응답 생성 (메타데이터 포함)
+                ai_response, ai_metadata = await generate_gemini_response(chat_history, user.id, metadata)
+                
+                # AI 메타데이터를 JSON 문자열로 변환
+                ai_metadata_json = None
+                if ai_metadata:
+                    try:
+                        ai_metadata_json = json.dumps(ai_metadata, ensure_ascii=False)
+                    except (TypeError, ValueError) as json_error:
+                        logger.warning(f"AI 메타데이터 직렬화 실패: {json_error}")
+                        ai_metadata_json = None
                 
                 # AI 응답 저장
                 ai_message = await db_helper.create_message(
                     requesting_user_id=user.id,
                     thread_id=thread_id,
                     message=ai_response,
-                    message_type="assistant"
+                    message_type="assistant",
+                    metadata=ai_metadata_json
                 )
                 
                 if not ai_message:
@@ -1433,7 +1514,6 @@ async def get_all_tokens_status(user=Depends(verify_auth)):
         token_statuses = []
         for site in user_sites:
             # 아임웹에서 사이트 이름을 가져와서 업데이트
-            site_code = site.get("site_code")
             await update_site_names_from_imweb(user.id)
 
             token_statuses.append({
@@ -1601,7 +1681,356 @@ async def create_thread(request: Request, user=Depends(verify_auth)):
             "status": "error",
             "message": str(e)
         })
+
+def validate_script_content(script_content: str) -> ScriptValidationResult:
+    """
+    스크립트 내용의 기본 검증을 수행합니다.
     
+    Args:
+        script_content: 검증할 스크립트 내용
+        
+    Returns:
+        ScriptValidationResult: 검증 결과
+    """
+    errors = []
+    warnings = []
+    
+    # 크기 검증 (100KB 제한)
+    max_size = 100 * 1024  # 100KB
+    if len(script_content.encode('utf-8')) > max_size:
+        errors.append(ScriptValidationError(
+            field="script_content",
+            error_type="size_limit_exceeded",
+            message=f"스크립트 크기가 {max_size}바이트를 초과합니다."
+        ))
+    
+    # 기본 XSS 패턴 검사 (간단한 패턴들만)
+    dangerous_patterns = [
+        "document.write",
+        "eval(",
+        "innerHTML",
+        "outerHTML"
+    ]
+    
+    for pattern in dangerous_patterns:
+        if pattern in script_content.lower():
+            warnings.append(f"잠재적으로 위험한 패턴 발견: {pattern}")
+    
+    return ScriptValidationResult(
+        is_valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings
+    )
+
+async def get_scripts_from_imweb(access_token: str, unit_code: str) -> Dict[str, Any]:
+    """
+    아임웹 API를 통해 스크립트를 조회합니다.
+    
+    Args:
+        access_token: 아임웹 API 액세스 토큰
+        unit_code: 사이트 유닛 코드
+        
+    Returns:
+        Dict: 스크립트 정보 또는 에러 정보
+    """
+    try:
+        response = requests.get(
+            "https://openapi.imweb.me/script",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+            },
+            params={
+                "unitCode": unit_code
+            },
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            response_data = response.json()
+            scripts_list = response_data.get("data", [])
+            
+            # 위치별 스크립트 정리
+            scripts = {"header": "", "body": "", "footer": ""}
+            for script in scripts_list:
+                position = script.get("position", "").lower()
+                content = script.get("scriptContent", "")
+                if position in scripts:
+                    scripts[position] = content
+                    
+            return {"success": True, "data": scripts}
+        else:
+            logger.error(f"아임웹 스크립트 조회 실패: {response.status_code} - {response.text}")
+            return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
+            
+    except Exception as e:
+        logger.error(f"아임웹 스크립트 조회 실패: {e}")
+        return {"success": False, "error": str(e)}
+
+async def deploy_script_to_imweb(access_token: str, unit_code: str, position: str, script_content: str, method: str = "PUT") -> Dict[str, Any]:
+    """
+    아임웹 API를 통해 스크립트를 배포합니다.
+    
+    Args:
+        access_token: 아임웹 API 액세스 토큰
+        unit_code: 사이트 유닛 코드
+        position: 스크립트 위치 (header, body, footer)
+        script_content: 스크립트 내용
+        method: HTTP 메서드 (PUT for update, POST for create)
+        
+    Returns:
+        Dict: 배포 결과
+    """
+    try:
+        url = "https://openapi.imweb.me/script"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "unitCode": unit_code,
+            "position": position,
+            "scriptContent": script_content
+        }
+        
+        if method == "PUT":
+            response = requests.put(url, headers=headers, json=data, timeout=10)
+        else:
+            response = requests.post(url, headers=headers, json=data, timeout=10)
+        
+        if response.status_code == 200:
+            response_data = response.json()
+            return {"success": True, "data": response_data.get("data", {})}
+        else:
+            logger.error(f"아임웹 스크립트 배포 실패: {response.status_code} - {response.text}")
+            return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
+            
+    except Exception as e:
+        logger.error(f"아임웹 스크립트 배포 실패: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/v1/sites/{site_id}/scripts")
+async def get_site_scripts(site_id: str, user=Depends(verify_auth)):
+    """
+    특정 사이트의 현재 스크립트를 조회하는 API
+    
+    Args:
+        site_id: 사이트 ID (사이트 코드)
+        
+    Returns:
+        스크립트 조회 결과 (header, body, footer)
+        
+    응답:
+    {
+        "status": "success",
+        "data": {
+            "header": "<script>...</script>",
+            "body": "<script>...</script>",
+            "footer": "<script>...</script>"
+        }
+    }
+    """
+    try:
+        # 사용자가 해당 사이트에 접근 권한이 있는지 확인
+        site = await db_helper.get_user_site_by_code(user.id, site_id)
+        if not site:
+            raise HTTPException(status_code=404, detail="사이트를 찾을 수 없거나 접근 권한이 없습니다.")
+        
+        # 액세스 토큰 확인
+        access_token = site.get('access_token')
+        if not access_token:
+            raise HTTPException(status_code=400, detail="사이트의 API 토큰이 설정되지 않았습니다.")
+        
+        # 사이트 유닛 코드 확인
+        unit_code = site.get('unit_code')
+        if not unit_code:
+            raise HTTPException(status_code=400, detail="사이트의 유닛 코드가 설정되지 않았습니다.")
+        
+        try:
+            # 토큰 복호화
+            decrypted_token = db_helper._decrypt_token(access_token)
+            
+            # 아임웹 API로 스크립트 조회
+            script_result = await get_scripts_from_imweb(decrypted_token, unit_code)
+            
+            if not script_result["success"]:
+                raise HTTPException(status_code=500, detail=f"스크립트 조회 실패: {script_result['error']}")
+            
+            # 응답 데이터는 이미 정리된 형태로 반환됨
+            scripts_data = script_result["data"]
+            
+            # 로그 기록
+            await db_helper.log_system_event(
+                user_id=user.id,
+                event_type='script_retrieved',
+                event_data={'site_code': site_id, 'action': 'get_scripts'}
+            )
+            
+            return JSONResponse(status_code=200, content={
+                "status": "success",
+                "data": scripts_data,
+                "message": "스크립트 조회 성공"
+            })
+            
+        except HTTPException:
+            raise
+        except Exception as api_error:
+            logger.error(f"아임웹 API 스크립트 조회 실패: {api_error}")
+            raise HTTPException(status_code=500, detail=f"스크립트 조회 실패: {str(api_error)}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"스크립트 조회 API 실패: {e}")
+        return JSONResponse(status_code=500, content={
+            "status": "error",
+            "message": str(e)
+        })
+
+@app.post("/api/v1/sites/{site_id}/scripts/deploy")
+async def deploy_site_scripts(site_id: str, request: Request, user=Depends(verify_auth)):
+    """
+    특정 사이트에 스크립트를 배포하는 API
+    
+    Args:
+        site_id: 사이트 ID (사이트 코드)
+        request: 요청 객체 (header, body, footer 스크립트 포함)
+        
+    Returns:
+        스크립트 배포 결과
+        
+    요청 본문:
+    {
+        "header": "<script>...</script>",
+        "body": "<script>...</script>",
+        "footer": "<script>...</script>"
+    }
+    
+    응답:
+    {
+        "status": "success",
+        "data": {
+            "deployed_at": "2025-07-22T10:30:00Z",
+            "site_id": "site123",
+            "deployed_scripts": {
+                "header": "<script>...</script>",
+                "body": "<script>...</script>",
+                "footer": "<script>...</script>"
+            }
+        }
+    }
+    """
+    try:
+        # 요청 데이터 파싱
+        request_data = await request.json()
+        
+        # 사용자가 해당 사이트에 접근 권한이 있는지 확인
+        site = await db_helper.get_user_site_by_code(user.id, site_id)
+        if not site:
+            raise HTTPException(status_code=404, detail="사이트를 찾을 수 없거나 접근 권한이 없습니다.")
+        
+        # 액세스 토큰 확인
+        access_token = site.get('access_token')
+        if not access_token:
+            raise HTTPException(status_code=400, detail="사이트의 API 토큰이 설정되지 않았습니다.")
+        
+        # 스크립트 데이터 추출 및 검증
+        scripts_to_deploy = {}
+        for position in ["header", "body", "footer"]:
+            script_content = request_data.get(position)
+            if script_content:
+                # 스크립트 검증
+                validation_result = validate_script_content(script_content)
+                if not validation_result.is_valid:
+                    error_messages = [err.message for err in validation_result.errors]
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{position} 스크립트 검증 실패: {'; '.join(error_messages)}"
+                    )
+                scripts_to_deploy[position] = script_content
+        
+        if not scripts_to_deploy:
+            raise HTTPException(status_code=400, detail="배포할 스크립트가 없습니다.")
+        
+        # 사이트 유닛 코드 확인
+        unit_code = site.get('unit_code')
+        if not unit_code:
+            raise HTTPException(status_code=400, detail="사이트의 유닛 코드가 설정되지 않았습니다.")
+        
+        try:
+            # 토큰 복호화
+            decrypted_token = db_helper._decrypt_token(access_token)
+            
+            # 각 위치별로 스크립트 배포
+            deployment_results = {}
+            for position, script_content in scripts_to_deploy.items():
+                try:
+                    # 먼저 PUT으로 기존 스크립트 수정 시도
+                    deploy_result = await deploy_script_to_imweb(
+                        decrypted_token, unit_code, position, script_content, method="PUT"
+                    )
+                    
+                    if not deploy_result["success"]:
+                        # PUT 실패시 POST로 새로운 스크립트 생성 시도
+                        deploy_result = await deploy_script_to_imweb(
+                            decrypted_token, unit_code, position, script_content, method="POST"
+                        )
+                        
+                        if not deploy_result["success"]:
+                            raise HTTPException(
+                                status_code=500,
+                                detail=f"{position} 스크립트 배포 실패: {deploy_result.get('error', '알 수 없는 오류')}"
+                            )
+                    
+                    deployment_results[position] = script_content
+                    logger.info(f"스크립트 배포 성공: {site_id} - {position}")
+                    
+                except Exception as deploy_error:
+                    logger.error(f"{position} 스크립트 배포 실패: {deploy_error}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"{position} 스크립트 배포 실패: {str(deploy_error)}"
+                    )
+            
+            # 배포 완료 시간
+            deployed_at = datetime.now().isoformat() + "Z"
+            
+            # 로그 기록
+            await db_helper.log_system_event(
+                user_id=user.id,
+                event_type='script_deployed',
+                event_data={
+                    'site_code': site_id,
+                    'action': 'deploy_scripts',
+                    'deployed_positions': list(deployment_results.keys()),
+                    'deployed_at': deployed_at
+                }
+            )
+            
+            return JSONResponse(status_code=200, content={
+                "status": "success",
+                "data": {
+                    "deployed_at": deployed_at,
+                    "site_id": site_id,
+                    "deployed_scripts": deployment_results
+                },
+                "message": f"{len(deployment_results)}개 스크립트가 성공적으로 배포되었습니다."
+            })
+            
+        except HTTPException:
+            raise
+        except Exception as api_error:
+            logger.error(f"아임웹 API 스크립트 배포 실패: {api_error}")
+            raise HTTPException(status_code=500, detail=f"스크립트 배포 실패: {str(api_error)}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"스크립트 배포 API 실패: {e}")
+        return JSONResponse(status_code=500, content={
+            "status": "error",
+            "message": str(e)
+        })
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
