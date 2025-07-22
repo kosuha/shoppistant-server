@@ -160,7 +160,7 @@ jobs:
           echo "IMWEB_REDIRECT_URI=${{ secrets.IMWEB_REDIRECT_URI }}" >> .env
           echo "IMWEB_BASE_URL=${{ secrets.IMWEB_BASE_URL }}" >> .env
           echo "GITHUB_REPOSITORY=${{ github.repository }}" >> .env
-          echo "PLAYWRIGHT_MCP_SERVER_URL=${{ secrets.PLAYWRIGHT_MCP_SERVER_URL }}" >> .env
+          echo "PLAYWRIGHT_MCP_SERVER_URL=http://playwright-mcp-server:8931" >> .env
           echo "SERVER_BASE_URL=${{ secrets.SERVER_BASE_URL }}" >> .env
           
           # 전체 스택 재시작 (의존성 때문에)

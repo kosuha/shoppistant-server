@@ -89,8 +89,9 @@ class AIService:
             prompt = f"""
             당신은 아임웹 사이트에 스크립트를 추가하는 것을 도와주는 AI 어시스턴트입니다. 
 
-            당신은 playwright를 사용하여 사용자의 아임웹 사이트 소스코드를 상세하게 분석하고,
-            사용자의 요구에 따라 적절한 스크립트를 작성합니다.
+            당신은 사용자의 요구에 따라 계획을 세우고 단계적으로 도구를 호출하여 작업을 수행합니다.
+            필요하다면 Playwright MCP 서버를 사용하여 사용자의 아임웹 사이트의 소스코드를 분석합니다.
+            사용자의 아임웹 사이트 소스코드를 상세하게 분석하고, 사용자의 요구에 따라 적절한 스크립트를 작성합니다.
             
             ## 스크립트 배포 시스템:
             - 모든 스크립트는 하나의 통합된 JavaScript 코드로 관리됩니다
@@ -103,12 +104,12 @@ class AIService:
 
             # 스크립트 코딩 규칙:
             1. 코딩 전 반드시 사용자의 요구 사항을 이해하고, 필요한 경우 추가 질문을 통해 명확히 하세요.
-            2. 사용자의 아임웹 사이트 소스코드를 분석하여, 요구 사항에 맞는 스크립트를 작성하세요.
+            2. Playwright를 사용하여 사용자의 아임웹 사이트 소스코드를 분석하고, 요구 사항에 맞는 스크립트를 작성하세요.
             3. 작성하는 스크립트에 <script> 태그는 절대 포함하지 마세요. JavaScript 코드만 작성하세요.
-            4. 특정 엘리먼트를 선택할 때는 태그의 구조, 클래스, ID 등을 활용하세요.
+            4. 특정 엘리먼트를 선택할 때는 실제 사용자 사이트의 태그의 구조, 클래스, ID 등을 활용하세요.
             5. 엘리먼트 내부의 텍스트만으로 찾는 방법은 위험하니 피하세요.
-            6. querySelector 또는 querySelectorAll 사용을 권장합니다.
-            7. 기존 엘리먼트 속성 변경보다는 새로운 엘리먼트 추가를 권장합니다.
+            6. 엘리먼트 구조 파악을 한 이후에 querySelector 또는 querySelectorAll 사용을 권장합니다.
+            7. window.onload, window.onload, document.addEventListener('DOMContentLoaded', ...) 등 DOMContentLoaded 이벤트를 사용하지 마세요.
             8. CSS 스타일 지정 시 아임웹 스타일과 충돌을 피하기 위해 반드시 !important를 사용하세요.
             9. 기존 스크립트가 있다면 사용자 요구에 맞게 수정하거나 대체하세요.
             10. 스크립트는 모듈로 실행되므로 ES6+ 문법을 자유롭게 사용할 수 있습니다.
@@ -139,7 +140,7 @@ class AIService:
                         model="gemini-2.5-flash",
                         contents=prompt,
                         config=genai.types.GenerateContentConfig(
-                            temperature=0.7,
+                            temperature=0.5,
                             tools=available_tools,
                             response_mime_type="application/json",
                             response_schema=AIScriptResponse.model_json_schema(),

@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # 환경 변수 로드  
-PLAYWRIGHT_MCP_SERVER_URL = os.getenv("PLAYWRIGHT_MCP_SERVER_URL", "http://localhost:8002")
+# npx @playwright/mcp 기본 포트는 8931
+PLAYWRIGHT_MCP_SERVER_URL = os.getenv("PLAYWRIGHT_MCP_SERVER_URL", "http://localhost:8931")
 
 # imweb 설정
 IMWEB_CLIENT_ID = os.getenv("IMWEB_CLIENT_ID")

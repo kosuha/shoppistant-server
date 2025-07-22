@@ -430,37 +430,45 @@ class DatabaseHelper:
             return {}
     
     async def update_site_script(self, user_id: str, site_code: str, script_content: str) -> Dict[str, Any]:
-        """사이트 스크립트 업데이트 (새 버전 생성)"""
+        """사이트 스크립트 업데이트"""
         try:
             # 사용자가 해당 사이트에 접근 권한이 있는지 확인
             site = await self.get_user_site_by_code(user_id, site_code)
             if not site:
                 raise PermissionError("사이트에 접근할 권한이 없습니다.")
             
-            # 현재 활성 스크립트와 동일한 내용인지 확인
+            # 현재 활성 스크립트 조회
             current_script = await self.get_site_script(user_id, site_code)
+            
+            # 현재 활성 스크립트와 동일한 내용인지 확인
             if current_script and current_script.get('script_content') == script_content:
                 logger.info(f"스크립트 내용이 기존과 동일함: site_code={site_code}")
                 return current_script
             
-            # 기존 활성 스크립트 비활성화
-            await self._deactivate_existing_scripts(user_id, site_code)
-            
-            # 새 버전 계산
-            version = await self._get_next_version(user_id, site_code)
-            
-            script_data = {
-                'user_id': user_id,
-                'site_code': site_code,
-                'script_content': script_content,
-                'version': version,
-                'is_active': True
-            }
-            
             client = self._get_client(use_admin=True)
-            result = client.table('site_scripts').insert(script_data).execute()
-            logger.info(f"사이트 스크립트 업데이트 완료: site_code={site_code}, version={version}")
-            return result.data[0] if result.data else {}
+            
+            # 기존 활성 스크립트가 있으면 덮어쓰기
+            if current_script:
+                script_id = current_script['id']
+                result = client.table('site_scripts').update({
+                    'script_content': script_content,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', script_id).execute()
+                logger.info(f"사이트 스크립트 덮어쓰기 완료: site_code={site_code}, script_id={script_id}")
+                return result.data[0] if result.data else {}
+            else:
+                # 기존 스크립트가 없으면 새로 생성
+                version = await self._get_next_version(user_id, site_code)
+                script_data = {
+                    'user_id': user_id,
+                    'site_code': site_code,
+                    'script_content': script_content,
+                    'version': version,
+                    'is_active': True
+                }
+                result = client.table('site_scripts').insert(script_data).execute()
+                logger.info(f"새 사이트 스크립트 생성 완료: site_code={site_code}, version={version}")
+                return result.data[0] if result.data else {}
         except Exception as e:
             logger.error(f"사이트 스크립트 업데이트 실패: {e}")
             return {}
