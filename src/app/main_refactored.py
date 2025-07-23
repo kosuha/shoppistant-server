@@ -1,92 +1,52 @@
-from fastapi import FastAPI, Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+"""
+리팩토링된 메인 애플리케이션
+"""
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-import os
-from dotenv import load_dotenv
-from supabase import create_client, Client
-from google import genai
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
+import uvicorn
 import logging
 from datetime import datetime
-from fastmcp import Client as MCPClient
 
-# Core imports - 새로운 구조
+# Core imports
 from core.config import settings
 from core.factory import ServiceFactory
-from core.middleware import setup_exception_handlers
+from core.interfaces import IAuthService, IDatabaseHelper
 from core.responses import success_response, error_response
 
-# Legacy Services Import (기존 호환성)
-from services.auth_service import AuthService
-from services.ai_service import AIService
-from services.imweb_service import ImwebService
-from services.script_service import ScriptService
-from services.thread_service import ThreadService
-from database_helper import DatabaseHelper
-
-# Routers Import
+# Router imports
 from routers import auth_router, site_router, script_router, thread_router
 
 # 로깅 설정
 logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
+    level=getattr(logging, settings.LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-
-# 환경 변수 로드 (settings에서 관리되지만 기존 코드 호환성을 위해 유지)
-MCP_SERVER_URL = settings.MCP_SERVER_URL
-IMWEB_CLIENT_ID = settings.IMWEB_CLIENT_ID
-IMWEB_CLIENT_SECRET = settings.IMWEB_CLIENT_SECRET
-IMWEB_REDIRECT_URI = settings.IMWEB_REDIRECT_URI
-SUPABASE_URL = settings.SUPABASE_URL
-SUPABASE_ANON_KEY = settings.SUPABASE_ANON_KEY
-SUPABASE_SERVICE_ROLE_KEY = settings.SUPABASE_SERVICE_ROLE_KEY
-GEMINI_API_KEY = settings.GEMINI_API_KEY
-
-# 레거시 클라이언트들 (기존 코드 호환성)
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-supabase_admin = None
-if SUPABASE_SERVICE_ROLE_KEY:
-    supabase_admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-    logger.info("Supabase 관리자 클라이언트 생성됨")
-else:
-    logger.warning("SUPABASE_SERVICE_ROLE_KEY가 설정되지 않음")
-
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+# 전역 변수
 mcp_client = None
 db_connected = False
-
-# 새로운 Factory 패턴으로 서비스 초기화
-ServiceFactory.configure_dependencies()
-
-# 레거시 서비스 인스턴스들 (기존 라우터 호환성)
-db_helper = ServiceFactory.get_db_helper()
-auth_service = ServiceFactory.get_auth_service()
-ai_service = ServiceFactory.get_ai_service()
-imweb_service = ServiceFactory.get_imweb_service()
-script_service = ServiceFactory.get_script_service()
-thread_service = ServiceFactory.get_thread_service()
-
 security = HTTPBearer()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # 시작 시 Playwright MCP 클라이언트 및 데이터베이스 초기화
+    """애플리케이션 라이프사이클 관리"""
     global mcp_client, db_connected
     
-    logger.info("애플리케이션 초기화 시작")
+    # 의존성 주입 설정
+    ServiceFactory.configure_dependencies()
+    logger.info("의존성 주입 컨테이너 설정 완료")
     
-    # 데이터베이스 연결 상태 확인
+    # 데이터베이스 연결 확인
     try:
+        db_helper = ServiceFactory.get_db_helper()
         health_status = await db_helper.health_check()
         db_connected = health_status.get('connected', False)
+        
         if db_connected:
             logger.info("데이터베이스 연결 성공")
-            # 시스템 시작 로그 기록
             await db_helper.log_system_event(
                 event_type='server_start',
                 event_data={'status': 'success', 'timestamp': datetime.now().isoformat()}
@@ -97,18 +57,10 @@ async def lifespan(_app: FastAPI):
         logger.error(f"데이터베이스 초기화 실패: {e}")
         db_connected = False
     
-    # MCP 클라이언트 초기화 (Factory 패턴 사용)
+    # MCP 클라이언트 초기화
     mcp_client = await ServiceFactory.initialize_mcp_client()
-    if mcp_client:
-        logger.info("MCP 클라이언트 연결 성공")
-        # 레거시 인스턴스도 업데이트
-        ai_service.mcp_client = mcp_client
-        logger.info("레거시 AI 서비스 인스턴스에도 MCP 클라이언트 주입 완료")
-        logger.info(f"AI 서비스 MCP 클라이언트 상태: {ai_service.mcp_client is not None}")
-    else:
-        logger.warning("MCP 클라이언트 연결 실패 (일반 모드로 계속)")
     
-    logger.info("모든 서비스 인스턴스 초기화 완료")
+    logger.info("애플리케이션 초기화 완료")
     
     yield
     
@@ -123,6 +75,7 @@ async def lifespan(_app: FastAPI):
     # 시스템 종료 로그 기록
     if db_connected:
         try:
+            db_helper = ServiceFactory.get_db_helper()
             await db_helper.log_system_event(
                 event_type='server_stop',
                 event_data={'status': 'success', 'timestamp': datetime.now().isoformat()}
@@ -130,16 +83,14 @@ async def lifespan(_app: FastAPI):
         except Exception as e:
             logger.error(f"종료 로그 기록 실패: {e}")
 
+# FastAPI 애플리케이션 생성
 app = FastAPI(
-    title="Imweb AI Agent Server", 
-    description="A server for managing AI agents in Imweb", 
+    title="Imweb AI Agent Server",
+    description="A server for managing AI agents in Imweb",
     version="1.0.0",
     lifespan=lifespan,
     debug=settings.DEBUG
 )
-
-# 예외 처리 미들웨어 설정
-setup_exception_handlers(app)
 
 # CORS 미들웨어 추가
 app.add_middleware(
@@ -150,16 +101,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 의존성 주입 함수들
+# 의존성 주입 함수
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """현재 사용자 정보를 가져오는 의존성"""
+    auth_service = ServiceFactory.get_auth_service()
     return await auth_service.verify_auth(credentials)
 
-# 라우터에서 사용할 의존성 함수들 설정
+# 서비스 의존성 함수들
+def get_auth_service() -> IAuthService:
+    return ServiceFactory.get_auth_service()
+
+def get_script_service():
+    return ServiceFactory.get_script_service()
+
+def get_imweb_service():
+    return ServiceFactory.get_imweb_service()
+
+def get_thread_service():
+    return ServiceFactory.get_thread_service()
+
+def get_db_helper():
+    return ServiceFactory.get_db_helper()
+
+# 라우터에 의존성 주입 설정
 auth_router.get_current_user = get_current_user
 site_router.get_current_user = get_current_user
 script_router.get_current_user = get_current_user
 thread_router.get_current_user = get_current_user
+
+# 라우터에 서비스 의존성 설정
+auth_router.get_auth_service = get_auth_service
+auth_router.get_imweb_service = get_imweb_service
+auth_router.get_db_helper = get_db_helper
+
+script_router.get_script_service = get_script_service
+thread_router.get_thread_service = get_thread_service
 
 # 기본 엔드포인트
 @app.get("/")
@@ -172,7 +148,7 @@ async def root():
 @app.get("/health")
 async def health_check():
     try:
-        # 데이터베이스 상태 확인
+        db_helper = ServiceFactory.get_db_helper()
         db_health = await db_helper.health_check()
         
         return success_response(
@@ -180,8 +156,7 @@ async def health_check():
                 "database": db_health,
                 "playwright_mcp_client": "connected" if mcp_client else "disconnected",
                 "timestamp": datetime.now().isoformat(),
-                "version": "1.0.0",
-                "environment": "development" if settings.DEBUG else "production"
+                "version": "1.0.0"
             },
             message="헬스 체크 성공"
         )
@@ -200,14 +175,9 @@ async def health_check():
 async def api_status():
     return success_response(
         data={
-            "api_version": "v1", 
+            "api_version": "v1",
             "service": "imweb-ai-agent-server",
-            "environment": "development" if settings.DEBUG else "production",
-            "features": {
-                "dependency_injection": True,
-                "exception_handling": True,
-                "structured_logging": True
-            }
+            "environment": "development" if settings.DEBUG else "production"
         },
         message="API 상태 정상"
     )
@@ -216,7 +186,7 @@ async def api_status():
 app.include_router(auth_router.router)
 app.include_router(site_router.router)
 app.include_router(script_router.router)
-app.include_router(script_router.module_router)  # 스크립트 모듈 제공용 라우터 (인증 불필요)
+app.include_router(script_router.module_router)
 app.include_router(thread_router.router)
 
 if __name__ == "__main__":
@@ -224,6 +194,5 @@ if __name__ == "__main__":
         app, 
         host=settings.HOST, 
         port=settings.PORT,
-        log_level=settings.LOG_LEVEL.lower(),
-        reload=settings.DEBUG
+        log_level=settings.LOG_LEVEL.lower()
     )

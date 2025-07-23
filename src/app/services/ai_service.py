@@ -13,12 +13,13 @@ logger = logging.getLogger(__name__)
 
 class AIService:
     def __init__(self, gemini_client: genai.Client, mcp_client: Optional[Client], db_helper: DatabaseHelper):
-        # MCP 클라이언트는 필수입니다.
-        if mcp_client is None:
-            raise ValueError("MCP 클라이언트가 필요합니다.")
+        # MCP 클라이언트는 선택적입니다. (runtime에 나중에 설정 가능)
         self.gemini_client = gemini_client
-        self.mcp_client = mcp_client
+        self.mcp_client = mcp_client  # None일 수 있음
         self.db_helper = db_helper
+        self.playwright_mcp_client = mcp_client  # 호환성을 위해 추가
+        
+        logger.info(f"AIService 초기화 완료 - MCP 클라이언트: {mcp_client is not None}")
 
     def parse_metadata_scripts(self, metadata: str) -> str:
         """
@@ -58,14 +59,23 @@ class AIService:
             # 사용자의 모든 사이트와 토큰 정보 가져오기
             user_sites = await self.db_helper.get_user_sites(user_id, user_id)
             if not user_sites:
+                logger.warning(f"사용자 {user_id}의 사이트 정보가 없습니다.")
                 return "아임웹 사이트가 연결되지 않았습니다. 먼저 사이트를 연결해주세요."
             
             # 세션 ID 생성
             session_id = str(uuid.uuid4())
             
             # MCP 서버에 모든 사이트 정보 설정
-            # FIXME: mcp_client가 None인 경우가 생겨서 문제임!!!
+            # MCP 클라이언트 확인 및 대기
+            logger.info(f"MCP 클라이언트 상태 확인: {self.mcp_client is not None}")
+            if self.mcp_client is None:
+                logger.error("MCP 클라이언트가 초기화되지 않았습니다. AI 응답을 생성할 수 없습니다.")
+                return "MCP 클라이언트가 초기화되지 않았습니다. 서버 관리자에게 문의하세요.", None
+            
+            logger.info(f"MCP 클라이언트 타입: {type(self.mcp_client)}")
             if self.mcp_client:
+                print(f"세션 ID: {session_id}, 사용자 ID: {user_id}, 사이트 수: {len(user_sites)}")
+                logger.info(f"세션 ID: {session_id}, 사용자 ID: {user_id}, 사이트 수: {len(user_sites)}")
                 try:
                     # 모든 사이트의 토큰 정보를 준비
                     sites_data = []
@@ -92,10 +102,7 @@ class AIService:
                     })
                 except Exception as e:
                     print(f"세션 토큰 설정 실패: {e}")
-                    return "세션 설정에 실패했습니다."
-            else:
-                logger.error("MCP 클라이언트가 초기화되지 않았습니다. AI 응답을 생성할 수 없습니다.")
-                raise ValueError("MCP 클라이언트가 초기화되지 않았습니다.")
+                    return "세션 설정에 실패했습니다.", None
 
             # 대화 내역을 Gemini 형식으로 변환
             contents = []
@@ -168,7 +175,7 @@ class AIService:
             try:
                 if available_tools:
                     structured_response = await self.gemini_client.aio.models.generate_content(
-                        model="gemini-2.5-flash",
+                        model="gemini-2.5-pro",
                         contents=prompt,
                         config=genai.types.GenerateContentConfig(
                             temperature=0.5,
@@ -180,7 +187,7 @@ class AIService:
                     )
                 else:
                     structured_response = self.gemini_client.models.generate_content(
-                        model="gemini-2.5-flash",
+                        model="gemini-2.5-pro",
                         contents=prompt,
                         config=genai.types.GenerateContentConfig(
                             temperature=0.6,
