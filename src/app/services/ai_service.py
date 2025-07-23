@@ -175,6 +175,7 @@ class AIService:
                 - 스크립트는 JavaScript(ES6+)로 작성되어야 합니다.
                 - 작성하는 스크립트에 <script> 태그는 절대 포함하지 마세요. JavaScript 코드만 작성하세요.
                 - querySelector 또는 querySelectorAll 사용을 권장합니다.
+                - 텍스트로 요소를 찾을때는 같은 텍스트를 가진 요소가 여러개 존재할 수 있다는 점을 유의하세요.
                 - 반드시 유일한 요소를 선택할 수 있어야 하며, querySelector로 정확히 하나만 선택되어야 합니다.
                 - 요소를 식별할 때는 다음 기준을 사용하세요:
                     1. ID가 존재하면 ID를 가장 먼저 우선적으로 고려하세요.
