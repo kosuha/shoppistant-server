@@ -9,7 +9,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME_MAIN: ${{ github.repository }}/main-server
-  IMAGE_NAME_PLAYWRIGHT: ${{ github.repository }}/playwright-mcp-server
+  IMAGE_NAME_MCP: ${{ github.repository }}/mcp-server
 
 jobs:
   test:
@@ -63,9 +63,9 @@ jobs:
           main:
             - 'src/app/**'
             - 'Dockerfile.main'
-          playwright:
-            - 'src/playwright-mcp/**'
-            - 'Dockerfile.playwright'
+          mcp:
+            - 'src/mcp/**'
+            - 'Dockerfile.mcp'
     
     - name: Log in to Container Registry
       uses: docker/login-action@v3
@@ -86,11 +86,11 @@ jobs:
           type=raw,value=latest,enable={{is_default_branch}}
     
     
-    - name: Extract metadata for Playwright MCP server
-      id: meta-playwright
+    - name: Extract metadata for MCP server
+      id: meta-mcp
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_PLAYWRIGHT }}
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_MCP }}
         tags: |
           type=ref,event=branch
           type=ref,event=pr
@@ -108,15 +108,15 @@ jobs:
         labels: ${{ steps.meta-main.outputs.labels }}
     
     
-    - name: Build and push Playwright MCP server image
-      if: steps.changes.outputs.playwright == 'true'
+    - name: Build and push MCP server image
+      if: steps.changes.outputs.mcp == 'true'
       uses: docker/build-push-action@v5
       with:
         context: .
-        file: ./Dockerfile.playwright
+        file: ./Dockerfile.mcp
         push: true
-        tags: ${{ steps.meta-playwright.outputs.tags }}
-        labels: ${{ steps.meta-playwright.outputs.labels }}
+        tags: ${{ steps.meta-mcp.outputs.tags }}
+        labels: ${{ steps.meta-mcp.outputs.labels }}
     
     - name: Deploy to EC2
       if: github.ref == 'refs/heads/main'
@@ -141,9 +141,9 @@ jobs:
             echo "Pulling main server image..."
             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_MAIN }}:latest
           fi
-          if [ "${{ steps.changes.outputs.playwright }}" = "true" ]; then
-            echo "Pulling Playwright MCP server image..."
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_PLAYWRIGHT }}:latest
+          if [ "${{ steps.changes.outputs.mcp }}" = "true" ]; then
+            echo "Pulling MCP server image..."
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_MCP }}:latest
           fi
           
           # docker-compose.yml 업데이트 (GitHub에서 가져오기)
@@ -160,7 +160,7 @@ jobs:
           echo "IMWEB_REDIRECT_URI=${{ secrets.IMWEB_REDIRECT_URI }}" >> .env
           echo "IMWEB_BASE_URL=${{ secrets.IMWEB_BASE_URL }}" >> .env
           echo "GITHUB_REPOSITORY=${{ github.repository }}" >> .env
-          echo "PLAYWRIGHT_MCP_SERVER_URL=http://playwright-mcp-server:8931" >> .env
+          echo "MCP_SERVER_URL=http://imweb-mcp-server:8001" >> .env
           echo "SERVER_BASE_URL=${{ secrets.SERVER_BASE_URL }}" >> .env
           
           # 전체 스택 재시작 (의존성 때문에)

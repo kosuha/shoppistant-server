@@ -1,3 +1,4 @@
+import uuid
 from fastmcp import Client
 from google import genai
 from google.genai import types
@@ -11,9 +12,12 @@ logger = logging.getLogger(__name__)
 
 
 class AIService:
-    def __init__(self, gemini_client: genai.Client, playwright_mcp_client: Optional[Client], db_helper: DatabaseHelper):
+    def __init__(self, gemini_client: genai.Client, mcp_client: Optional[Client], db_helper: DatabaseHelper):
+        # MCP 클라이언트는 필수입니다.
+        if mcp_client is None:
+            raise ValueError("MCP 클라이언트가 필요합니다.")
         self.gemini_client = gemini_client
-        self.playwright_mcp_client = playwright_mcp_client
+        self.mcp_client = mcp_client
         self.db_helper = db_helper
 
     def parse_metadata_scripts(self, metadata: str) -> str:
@@ -51,23 +55,49 @@ class AIService:
             tuple: (응답 텍스트, 메타데이터)
         """
         try:
-            # 1. 사용자의 모든 사이트 정보 가져오기 (토큰 검증 목적)
+            # 사용자의 모든 사이트와 토큰 정보 가져오기
             user_sites = await self.db_helper.get_user_sites(user_id, user_id)
             if not user_sites:
-                return "아임웹 사이트가 연결되지 않았습니다. 먼저 사이트를 연결해주세요.", None
+                return "아임웹 사이트가 연결되지 않았습니다. 먼저 사이트를 연결해주세요."
             
-            # 2. 현재 스크립트 정보 추출
-            current_script = self.parse_metadata_scripts(metadata)
+            # 세션 ID 생성
+            session_id = str(uuid.uuid4())
             
-            # 3. 최신 사용자 메시지 확인
-            latest_user_message = ""
-            if chat_history:
-                for msg in reversed(chat_history):
-                    if msg.get("message_type") == "user":
-                        latest_user_message = msg.get("message", "")
-                        break
-            
-            # 5. 대화 내역을 Gemini 형식으로 변환
+            # MCP 서버에 모든 사이트 정보 설정
+            # FIXME: mcp_client가 None인 경우가 생겨서 문제임!!!
+            if self.mcp_client:
+                try:
+                    # 모든 사이트의 토큰 정보를 준비
+                    sites_data = []
+                    for site in user_sites:
+                        site_code = site.get('site_code')
+                        access_token = site.get('access_token')
+                        if site_code and access_token:
+                            # 토큰 복호화
+                            decrypted_token = self.db_helper._decrypt_token(access_token)
+                            sites_data.append({
+                                "site_name": site.get('site_name', site_code) or site_code,
+                                "site_code": site_code,
+                                "access_token": decrypted_token
+                            })
+                    
+                    if not sites_data:
+                        return "아임웹 API 토큰이 설정되지 않았습니다. 먼저 토큰을 등록해주세요."
+                    
+                    # MCP 도구 호출
+                    await self.mcp_client.call_tool("set_session_token", {
+                        "session_id": session_id,
+                        "user_id": user_id,
+                        "sites": sites_data
+                    })
+                except Exception as e:
+                    print(f"세션 토큰 설정 실패: {e}")
+                    return "세션 설정에 실패했습니다."
+            else:
+                logger.error("MCP 클라이언트가 초기화되지 않았습니다. AI 응답을 생성할 수 없습니다.")
+                raise ValueError("MCP 클라이언트가 초기화되지 않았습니다.")
+
+            # 대화 내역을 Gemini 형식으로 변환
             contents = []
             for msg in chat_history:
                 created_at = msg.get('created_at', '')
@@ -78,14 +108,15 @@ class AIService:
             
             conversation_context = "\n".join(contents)
             
-            # 7. 현재 스크립트 정보 문자열 생성
+            # 현재 스크립트 정보 문자열 생성
+            current_script = self.parse_metadata_scripts(metadata)
             current_scripts_info = ""
             if current_script:
                 current_scripts_info += f"- 현재 등록된 스크립트:\n{current_script}\n"
             else:
                 current_scripts_info = "- 현재 등록된 스크립트가 없습니다.\n"
             
-            # 8. 시스템 프롬프트 구성
+            # 시스템 프롬프트 구성
             prompt = f"""
             당신은 아임웹 사이트에 스크립트를 추가하는 것을 도와주는 AI 어시스턴트입니다. 
 
@@ -125,10 +156,10 @@ class AIService:
             {conversation_context}
             """
 
-            # 8. Playwright MCP 도구 사용 가능 여부 확인
+            # MCP 도구 사용 가능 여부 확인
             available_tools = []
-            if self.playwright_mcp_client:
-                available_tools.append(self.playwright_mcp_client.session)
+            if self.mcp_client:
+                available_tools.append(self.mcp_client.session)
             
             response_text = ""
             response_metadata = None

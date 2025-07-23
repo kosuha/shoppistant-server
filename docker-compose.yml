@@ -15,27 +15,24 @@ services:
       - IMWEB_CLIENT_ID=${IMWEB_CLIENT_ID}
       - IMWEB_CLIENT_SECRET=${IMWEB_CLIENT_SECRET}
       - IMWEB_REDIRECT_URI=${IMWEB_REDIRECT_URI}
-      - PLAYWRIGHT_MCP_SERVER_URL=http://playwright-mcp-server:8931
+      - MCP_SERVER_URL=${MCP_SERVER_URL}
       - SERVER_BASE_URL=${SERVER_BASE_URL}
     depends_on:
-      - playwright-mcp-server
+      - mcp-server
     networks:
       - imweb-network
     restart: unless-stopped
 
-  playwright-mcp-server:
-    image: ghcr.io/${GITHUB_REPOSITORY}/playwright-mcp-server:latest
-    container_name: playwright-mcp-server
+  mcp-server:
+    image: ghcr.io/${GITHUB_REPOSITORY}/mcp-server:latest
+    container_name: imweb-mcp-server
     expose:
-      - "8931"
+      - "8001"
     environment:
-      - NODE_ENV=production
+      - PYTHONUNBUFFERED=1
     networks:
       - imweb-network
     restart: unless-stopped
-    security_opt:
-      - seccomp:unconfined
-    shm_size: 2gb
 
 networks:
   imweb-network:

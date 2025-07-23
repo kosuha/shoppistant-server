@@ -1,0 +1,24 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 시스템 의존성 설치
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# 파이썬 의존성 파일 복사
+COPY pyproject.toml uv.lock ./
+
+# uv 설치 및 의존성 설치
+RUN pip install uv
+RUN uv sync --frozen
+
+# 애플리케이션 코드 복사
+COPY src/mcp/. ./
+
+# 포트 노출
+EXPOSE 8001
+
+# 앱 실행
+CMD ["uv", "run", "python", "imweb-mcp-server.py"]

@@ -482,7 +482,6 @@ dependencies = [
     { name = "fastmcp" },
     { name = "google-genai" },
     { name = "playwright" },
-    { name = "playwright-mcp" },
     { name = "pydantic" },
     { name = "pyjwt" },
     { name = "python-dotenv" },
@@ -497,7 +496,6 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=2.10.5" },
     { name = "google-genai", specifier = ">=1.26.0" },
     { name = "playwright", specifier = ">=1.53.0" },
-    { name = "playwright-mcp", specifier = ">=0.1.0" },
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "pyjwt", specifier = ">=2.8.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
@@ -614,19 +612,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/51/63/28b3f2d36e6a95e88f033d2aa7af06083f6f4aa0d9764759d96033cd053e/playwright-1.53.0-py3-none-win32.whl", hash = "sha256:36eedec101724ff5a000cddab87dd9a72a39f9b3e65a687169c465484e667c06", size = 35415131, upload-time = "2025-06-25T21:48:53.403Z" },
     { url = "https://files.pythonhosted.org/packages/a9/b5/4ca25974a90d16cfd4a9a953ee5a666cf484a0bdacb4eed484e5cab49e66/playwright-1.53.0-py3-none-win_amd64.whl", hash = "sha256:d68975807a0fd997433537f1dcf2893cda95884a39dc23c6f591b8d5f691e9e8", size = 35415138, upload-time = "2025-06-25T21:48:57.082Z" },
     { url = "https://files.pythonhosted.org/packages/9a/81/b42ff2116df5d07ccad2dc4eeb20af92c975a1fbc7cd3ed37b678468b813/playwright-1.53.0-py3-none-win_arm64.whl", hash = "sha256:fcfd481f76568d7b011571160e801b47034edd9e2383c43d83a5fb3f35c67885", size = 31188568, upload-time = "2025-06-25T21:49:00.194Z" },
-]
-
-[[package]]
-name = "playwright-mcp"
-version = "0.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "mcp" },
-    { name = "playwright" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/21/a8/21e97b0c6b2caa450212d2d05249690c0714db8815fd1a4c8b9cc94ad90b/playwright_mcp-0.1.0.tar.gz", hash = "sha256:82dd9272399f0163db6c7e8768d9cda63163f0850f63fca3f934cf98b1d97212", size = 21669, upload-time = "2025-03-13T05:36:10.11Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/95/ef/cd9c2f16def35ccdd7a215ae019a5d0be785c19785e2a51fd481feca84b0/playwright_mcp-0.1.0-py3-none-any.whl", hash = "sha256:84839a3bc1260e1d928bf27d60d17bdf4a9f9f2c5c7022169e5de2b2c292141f", size = 6924, upload-time = "2025-03-13T05:36:08.613Z" },
 ]
 
 [[package]]
