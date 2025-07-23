@@ -10,7 +10,6 @@ session_tools = SessionTools(mcp)
 
 # 다른 도구들에 세션 참조 전달
 SiteInfo(mcp, session_tools)
-Script(mcp, session_tools)
 
 if __name__ == "__main__":
     mcp.run(

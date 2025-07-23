@@ -54,7 +54,7 @@ class AIScriptResponse(BaseModel):
         None,
         description="스크립트 수정이 필요한 경우의 업데이트 정보"
     )
-
+    
 class ScriptValidationError(BaseModel):
     """스크립트 검증 오류를 나타내는 모델"""
     field: str = Field(..., description="오류가 발생한 필드")

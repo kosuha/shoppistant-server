@@ -59,7 +59,7 @@ async def deploy_site_scripts(site_code: str, request: Request, user=Depends(get
         return JSONResponse(status_code=200, content={
             "status": "success",
             "data": result["data"],
-            "message": result["message"]
+            "message": result["data"].get("message", "스크립트 배포 성공")
         })
         
     except HTTPException:
