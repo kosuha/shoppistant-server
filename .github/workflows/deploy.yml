@@ -66,6 +66,9 @@ jobs:
           mcp:
             - 'src/mcp/**'
             - 'Dockerfile.mcp'
+            - 'pyproject.toml'
+            - 'uv.lock'
+            - 'requirements.txt'
     
     - name: Log in to Container Registry
       uses: docker/login-action@v3
