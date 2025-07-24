@@ -1,6 +1,7 @@
 import json
 import logging
 from typing import Dict, Any, Optional
+from services.script_service import ScriptService
 from database_helper import DatabaseHelper
 from services.ai_service import AIService
 
@@ -8,9 +9,10 @@ logger = logging.getLogger(__name__)
 
 
 class ThreadService:
-    def __init__(self, db_helper: DatabaseHelper, ai_service: AIService):
+    def __init__(self, db_helper: DatabaseHelper, ai_service: AIService, script_service: ScriptService):
         self.db_helper = db_helper
         self.ai_service = ai_service
+        self.script_service = script_service
 
     async def create_thread(self, user_id: str, site_code: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -206,8 +208,8 @@ class ThreadService:
             logger.error(f"메시지 조회 실패: {e}")
             return {"success": False, "error": str(e), "status_code": 500}
 
-    async def create_message(self, user_id: str, thread_id: str, message: str, message_type: str = "user", metadata: Optional[str] = None) -> Dict[str, Any]:
-        print(f"[THREAD SERVICE] create_message 메시지 생성 요청: user={user_id}, thread={thread_id}, type={message_type} message={message[:50]} metadata={metadata}")
+    async def create_message(self, user_id: str, thread_id: str, message: str, message_type: str = "user", metadata: Optional[str] = None, auto_deploy: bool = False) -> Dict[str, Any]:
+        print(f"[THREAD SERVICE] create_message 메시지 생성 요청: user={user_id}, thread={thread_id}, type={message_type} message={message[:50]} metadata={metadata} auto_deploy={auto_deploy}")
         """
         새로운 메시지를 생성합니다.
         사용자가 메시지를 보내면 자동으로 AI 응답을 생성하여 저장합니다.
@@ -218,6 +220,7 @@ class ThreadService:
             message: 메시지 내용
             message_type: 메시지 타입 (user/assistant/system, 기본값: user)
             metadata: 메타데이터 (선택사항)
+            auto_deploy: 자동 배포 여부 (기본값: False)
             
         Returns:
             Dict: 메시지 생성 결과
@@ -235,6 +238,9 @@ class ThreadService:
             thread = await self.db_helper.get_thread_by_id(user_id, thread_id)
             if not thread:
                 return {"success": False, "error": "스레드를 찾을 수 없습니다.", "status_code": 404}
+
+            # 스레드에서 site_code 추출
+            site_code = thread.get('site_code', 'default')
 
             print(f"[THREAD SERVICE] 스레드 소유확인")
 
@@ -290,6 +296,16 @@ class ThreadService:
                     else:
                         raise ValueError(f"AI 서비스에서 예상치 못한 형태의 응답을 받았습니다: {type(ai_response_result)}")
                     
+                    if ai_metadata and auto_deploy:
+                        if not isinstance(ai_metadata, dict):
+                            raise TypeError(f"AI 메타데이터는 dict 타입이어야 합니다. 현재 타입: {type(ai_metadata)}")
+                        script_dict = ai_metadata.get("script_updates", {}).get("script", {})
+                        if script_dict:
+                            script_content = script_dict.get("content", "")
+                            result = await self.script_service.deploy_site_scripts(user_id, site_code, script_content)
+                            if not result["success"]:
+                                raise ValueError(f"스크립트 자동 배포 실패: {result['error']}")
+
                     # AI 메타데이터를 JSON 문자열로 변환
                     ai_metadata_json = None
                     if ai_metadata:

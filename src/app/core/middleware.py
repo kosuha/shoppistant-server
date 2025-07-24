@@ -19,7 +19,7 @@ async def business_exception_handler(request: Request, exc: BusinessException):
         content=error_response(
             message=exc.message,
             error_code=exc.error_code
-        ).dict()
+        ).model_dump()
     )
 
 async def http_exception_handler_custom(request: Request, exc: HTTPException):
@@ -31,7 +31,7 @@ async def http_exception_handler_custom(request: Request, exc: HTTPException):
         content=error_response(
             message=exc.detail,
             error_code="HTTP_ERROR"
-        ).dict()
+        ).model_dump()
     )
 
 async def general_exception_handler(request: Request, exc: Exception):
@@ -43,7 +43,7 @@ async def general_exception_handler(request: Request, exc: Exception):
         content=error_response(
             message="내부 서버 오류가 발생했습니다",
             error_code="INTERNAL_SERVER_ERROR"
-        ).dict()
+        ).model_dump()
     )
 
 def setup_exception_handlers(app):
