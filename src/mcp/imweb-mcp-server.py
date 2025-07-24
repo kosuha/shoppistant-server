@@ -3,6 +3,8 @@ from tools.session_tools import SessionTools
 from tools.script import Script
 from tools.site_info import SiteInfo
 
+# Force rebuild trigger for dependency update
+
 mcp = FastMCP(name="imweb-mcp-server")
 
 # 세션 도구를 먼저 초기화
