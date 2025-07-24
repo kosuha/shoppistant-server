@@ -193,8 +193,8 @@ class SiteInfo:
             selector += f"#{element.get('id')}"
         if element.get('class'):
             classes = element.get('class')
-            # 의미 있는 클래스만 포함 (길이 제한)
-            meaningful_classes = [cls for cls in classes if len(cls) < 30 and not cls.startswith('css-')]
+            # 의미 있는 클래스만 포함
+            meaningful_classes = [cls for cls in classes if not cls.startswith('css-')]
             if meaningful_classes:
                 selector += f".{'.'.join(meaningful_classes[:2])}"
         
