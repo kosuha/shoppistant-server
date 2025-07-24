@@ -208,7 +208,7 @@ class ThreadService:
             logger.error(f"메시지 조회 실패: {e}")
             return {"success": False, "error": str(e), "status_code": 500}
 
-    async def create_message(self, user_id: str, thread_id: str, message: str, message_type: str = "user", metadata: Optional[str] = None, auto_deploy: bool = False) -> Dict[str, Any]:
+    async def create_message(self, user_id: str, site_code: str, thread_id: str, message: str, message_type: str = "user", metadata: Optional[str] = None, auto_deploy: bool = False) -> Dict[str, Any]:
         print(f"[THREAD SERVICE] create_message 메시지 생성 요청: user={user_id}, thread={thread_id}, type={message_type} message={message[:50]} metadata={metadata} auto_deploy={auto_deploy}")
         """
         새로운 메시지를 생성합니다.
@@ -238,9 +238,6 @@ class ThreadService:
             thread = await self.db_helper.get_thread_by_id(user_id, thread_id)
             if not thread:
                 return {"success": False, "error": "스레드를 찾을 수 없습니다.", "status_code": 404}
-
-            # 스레드에서 site_code 추출
-            site_code = thread.get('site_code', 'default')
 
             print(f"[THREAD SERVICE] 스레드 소유확인")
 
@@ -302,7 +299,7 @@ class ThreadService:
                         script_dict = ai_metadata.get("script_updates", {}).get("script", {})
                         if script_dict:
                             script_content = script_dict.get("content", "")
-                            result = await self.script_service.deploy_site_scripts(user_id, site_code, script_content)
+                            result = await self.script_service.deploy_site_scripts(user_id, site_code, {"script": script_content})
                             if not result["success"]:
                                 raise ValueError(f"스크립트 자동 배포 실패: {result['error']}")
 

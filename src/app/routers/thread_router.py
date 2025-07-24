@@ -221,9 +221,12 @@ async def create_message(
         message = request_data.get("message")
         message_type = request_data.get("message_type", "user")
         metadata = request_data.get("metadata")
+        site_code = request_data.get("site_code")
         auto_deploy = request_data.get("auto_deploy", False)
 
-        result = await thread_service.create_message(user.id, thread_id, message, message_type, metadata, auto_deploy)
+        print(f"[ROUTER] create_message 요청 데이터: {site_code}")
+
+        result = await thread_service.create_message(user.id, site_code, thread_id, message, message_type, metadata, auto_deploy)
         
         if not result["success"]:
             raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
