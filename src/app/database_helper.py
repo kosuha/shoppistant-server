@@ -64,16 +64,15 @@ class DatabaseHelper:
             return []
     
     async def create_user_site(self, user_id: str, site_code: str, site_name: str = None, 
-                             access_token: str = None, refresh_token: str = None, unit_code: str = None) -> Dict[str, Any]:
+                             unit_code: str = None, domain: str = None) -> Dict[str, Any]:
         """새로운 사이트 연결 생성"""
         try:
             site_data = {
                 'user_id': user_id,
                 'site_code': site_code,
                 'site_name': site_name,
-                'access_token': self._encrypt_token(access_token) if access_token else None,
-                'refresh_token': self._encrypt_token(refresh_token) if refresh_token else None,
-                'unit_code': unit_code
+                'unit_code': unit_code,
+                'primary_domain': domain
             }
             
             client = self._get_client(use_admin=True)
@@ -83,22 +82,6 @@ class DatabaseHelper:
             logger.error(f"사이트 연결 생성 실패: {e}")
             return {}
     
-    async def update_user_site_tokens(self, user_id: str, site_code: str, 
-                                    access_token: str = None, refresh_token: str = None) -> bool:
-        """사용자 사이트의 토큰 업데이트"""
-        try:
-            update_data = {}
-            if access_token:
-                update_data['access_token'] = self._encrypt_token(access_token)
-            if refresh_token:
-                update_data['refresh_token'] = self._encrypt_token(refresh_token)
-            
-            client = self._get_client(use_admin=True)
-            result = client.table('user_sites').update(update_data).eq('user_id', user_id).eq('site_code', site_code).execute()
-            return len(result.data) > 0
-        except Exception as e:
-            logger.error(f"사이트 토큰 업데이트 실패: {e}")
-            return False
     
     async def get_user_site_by_code(self, user_id: str, site_code: str) -> Optional[Dict[str, Any]]:
         """사이트 코드로 사용자 사이트 조회"""
@@ -106,13 +89,7 @@ class DatabaseHelper:
             client = self._get_client(use_admin=True)
             result = client.table('user_sites').select('*').eq('user_id', user_id).eq('site_code', site_code).execute()
             if result.data:
-                site_data = result.data[0]
-                # 토큰 복호화
-                if site_data.get('access_token'):
-                    site_data['access_token'] = self._decrypt_token(site_data['access_token'])
-                if site_data.get('refresh_token'):
-                    site_data['refresh_token'] = self._decrypt_token(site_data['refresh_token'])
-                return site_data
+                return result.data[0]
             return None
         except Exception as e:
             logger.error(f"사이트 조회 실패: {e}")
@@ -260,47 +237,8 @@ class DatabaseHelper:
             return False
     
     # 유틸리티 함수들
-    def _encrypt_token(self, token: str) -> str:
-        """토큰 암호화 (실제 구현에서는 더 강력한 암호화 사용)"""
-        if not token:
-            return token
-        try:
-            import base64
-            return base64.b64encode(token.encode()).decode()
-        except Exception as e:
-            logger.error(f"토큰 암호화 실패: {e}")
-            return token
     
-    def _decrypt_token(self, encrypted_token: str) -> str:
-        """토큰 복호화"""
-        if not encrypted_token:
-            return encrypted_token
-        try:
-            import base64
-            return base64.b64decode(encrypted_token.encode()).decode()
-        except Exception as e:
-            logger.error(f"토큰 복호화 실패: {e}")
-            return encrypted_token
     
-    async def get_user_token_by_site_code(self, user_id: str, site_code: str) -> Optional[str]:
-        """사이트 코드로 사용자 토큰 조회"""
-        site_data = await self.get_user_site_by_code(user_id, site_code)
-        return site_data.get('access_token') if site_data else None
-    
-    async def get_user_token(self, user_id: str) -> Optional[str]:
-        """사용자 ID로 토큰 조회 - user_sites에서 첫 번째 사이트의 토큰 반환"""
-        try:
-            user_sites = await self.get_user_sites(user_id, user_id)
-            if user_sites:
-                # 첫 번째 사이트의 토큰 반환
-                first_site = user_sites[0]
-                access_token = first_site.get('access_token')
-                if access_token:
-                    return self._decrypt_token(access_token)
-            return None
-        except Exception as e:
-            logger.error(f"사용자 토큰 조회 실패: {e}")
-            return None
     
     async def update_site_name(self, user_id: str, site_code: str, site_name: str) -> bool:
         """사이트 이름 업데이트"""
@@ -589,56 +527,18 @@ class DatabaseHelper:
         """사이트 코드로 사이트 도메인 조회 (공개 접근용, 인증 불필요)"""
         try:
             client = self._get_client(use_admin=True)
-            # 먼저 DB에서 primary_domain 조회
-            result = client.table('user_sites').select('primary_domain, unit_code, access_token').eq('site_code', site_code).execute()
+            # DB에서 primary_domain 조회
+            result = client.table('user_sites').select('primary_domain').eq('site_code', site_code).execute()
             
             if result.data:
                 site_data = result.data[0]
                 domain = site_data.get('primary_domain', '')
                 
-                # DB에 도메인이 있으면 반환
                 if domain:
                     if not domain.startswith(('http://', 'https://')):
                         domain = f"https://{domain}"
-                    logger.info(f"사이트 도메인 조회 성공 (DB): site_code={site_code}, domain={domain}")
+                    logger.info(f"사이트 도메인 조회 성공: site_code={site_code}, domain={domain}")
                     return domain
-                
-                # DB에 도메인이 없으면 ImWeb API로 조회
-                unit_code = site_data.get('unit_code')
-                access_token = site_data.get('access_token')
-                
-                if unit_code and access_token:
-                    try:
-                        # 토큰 복호화
-                        decrypted_token = self._decrypt_token(access_token)
-                        
-                        # ImWeb API 호출
-                        import requests
-                        response = requests.get(
-                            f"https://openapi.imweb.me/site-info/unit/{unit_code}",
-                            headers={"Authorization": f"Bearer {decrypted_token}"},
-                            timeout=10
-                        )
-                        
-                        if response.status_code == 200:
-                            response_data = response.json()
-                            if response_data.get("statusCode") == 200:
-                                unit_data = response_data.get("data", {})
-                                primary_domain = unit_data.get('primaryDomain')
-                                
-                                if primary_domain:
-                                    # DB에 도메인 정보 저장
-                                    client.table('user_sites').update({
-                                        'primary_domain': primary_domain
-                                    }).eq('site_code', site_code).execute()
-                                    
-                                    if not primary_domain.startswith(('http://', 'https://')):
-                                        primary_domain = f"https://{primary_domain}"
-                                    
-                                    logger.info(f"사이트 도메인 조회 성공 (API): site_code={site_code}, domain={primary_domain}")
-                                    return primary_domain
-                    except Exception as api_error:
-                        logger.warning(f"ImWeb API 호출 실패, 기본값 사용: {api_error}")
                 
                 logger.info(f"사이트 도메인이 비어있음: site_code={site_code}")
                 return None

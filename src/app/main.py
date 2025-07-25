@@ -20,7 +20,7 @@ from core.responses import success_response, error_response
 # Legacy Services Import (기존 호환성)
 from services.auth_service import AuthService
 from services.ai_service import AIService
-from services.imweb_service import ImwebService
+from services.imweb_service import WebsiteService
 from services.script_service import ScriptService
 from services.thread_service import ThreadService
 from database_helper import DatabaseHelper
@@ -215,6 +215,7 @@ async def api_status():
 # 라우터 등록
 app.include_router(auth_router.router)
 app.include_router(site_router.router)
+app.include_router(site_router.websites_router)  # 웹사이트 추가용 라우터
 app.include_router(script_router.router)
 app.include_router(script_router.module_router)  # 스크립트 모듈 제공용 라우터 (인증 불필요)
 app.include_router(thread_router.router)

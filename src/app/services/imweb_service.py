@@ -1,325 +1,83 @@
-import requests
 import logging
+import uuid
+from datetime import datetime
 from typing import Dict, Any
 from database_helper import DatabaseHelper
 
 logger = logging.getLogger(__name__)
 
-
-class ImwebService:
+class WebsiteService:
     def __init__(self, client_id: str, client_secret: str, redirect_uri: str, db_helper: DatabaseHelper):
         self.client_id = client_id
         self.client_secret = client_secret
         self.redirect_uri = redirect_uri
         self.db_helper = db_helper
 
-    async def fetch_site_info_from_imweb(self, access_token: str) -> Dict[str, Any]:
+    async def add_website(self, user_id: str, domain: str) -> Dict[str, Any]:
         """
-        아임웹 API를 통해 사이트 정보를 조회합니다.
-        
-        Args:
-            access_token: 아임웹 API 액세스 토큰
-            
-        Returns:
-            Dict: 사이트 정보 또는 에러 정보
-        """
-        try:
-            response = requests.get(
-                "https://openapi.imweb.me/site-info",
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                },
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                response_data = response.json()
-                if response_data.get("statusCode") == 200:
-                    return {"success": True, "data": response_data.get("data", {})}
-                else:
-                    return {"success": False, "error": response_data.get("error", {}).get("message", "알 수 없는 오류")}
-            else:
-                return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
-                
-        except Exception as e:
-            logger.error(f"아임웹 API 호출 실패: {e}")
-            return {"success": False, "error": str(e)}
-
-    async def update_site_info_from_imweb(self, user_id: str) -> Dict[str, Any]:
-        """
-        사용자의 모든 사이트 정보를 아임웹 API로 조회하여 데이터베이스의 사이트 이름과 유닛코드를 업데이트합니다.
+        새로운 웹사이트 추가 - 도메인 기반 단순 연동
         
         Args:
             user_id: 사용자 ID
+            domain: 웹사이트 도메인
             
         Returns:
-            Dict: 업데이트 결과
+            Dict: 사이트 코드와 연동 스크립트를 포함한 결과
         """
         try:
-            # 사용자의 모든 사이트 조회
-            user_sites = await self.db_helper.get_user_sites(user_id, user_id)
-            if not user_sites:
-                return {"success": False, "message": "연결된 사이트가 없습니다."}
+            # 도메인 정규화 (프로토콜, 경로, 파라미터, 앵커 모두 제거)
+            normalized_domain = domain.replace("https://", "").replace("http://", "")
+            # URL 경로, 파라미터, 앵커 제거 (첫 번째 /, ?, # 이후 모든 내용 제거)
+            if "/" in normalized_domain:
+                normalized_domain = normalized_domain.split("/")[0]
+            if "?" in normalized_domain:
+                normalized_domain = normalized_domain.split("?")[0]
+            if "#" in normalized_domain:
+                normalized_domain = normalized_domain.split("#")[0]
+            normalized_domain = normalized_domain.strip()
             
-            update_results = []
+            # 사이트 코드 생성 (ws + 날짜시분초 + UUID)
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            uuid_part = str(uuid.uuid4())[:8]
+            site_code = f"ws{timestamp}{uuid_part}"
             
-            for site in user_sites:
-                site_code = site.get('site_code')
-                access_token = site.get('access_token')
-                current_site_name = site.get('site_name')
-                current_unit_code = site.get('unit_code')
-                
-                if not site_code or not access_token:
-                    update_results.append({
-                        "site_code": site_code,
-                        "success": False,
-                        "error": "사이트 코드 또는 토큰이 없습니다."
-                    })
-                    continue
-                
-                # 토큰 복호화
-                decrypted_token = self.db_helper._decrypt_token(access_token)
-                
-                # 아임웹 API로 사이트 정보 조회
-                site_info_result = await self.fetch_site_info_from_imweb(decrypted_token)
-                
-                if site_info_result["success"]:
-                    site_data = site_info_result["data"]
-                    # 아임웹에서 사이트 이름 가져오기 (siteName 또는 title 필드)
-                    imweb_site_name = site_data.get('unitList')[0].get('name')
-                    imweb_unit_code = site_data.get('unitList')[0].get('unitCode')
-                    
-                    # 도메인 정보 가져오기 위해 유닛 상세 정보 조회
-                    if imweb_unit_code:
-                        unit_info_result = await self.fetch_site_unit_info(decrypted_token, imweb_unit_code)
-                        if unit_info_result["success"]:
-                            unit_data = unit_info_result["data"]
-                            primary_domain = unit_data.get('primaryDomain')
-                            
-                            # 도메인 정보 업데이트
-                            if primary_domain:
-                                domain_update_success = await self.db_helper.update_site_domain(user_id, site_code, primary_domain)
-                                if domain_update_success:
-                                    logger.info(f"사이트 {site_code}의 도메인을 {primary_domain}로 업데이트 완료")
-                                else:
-                                    logger.warning(f"사이트 {site_code}의 도메인 업데이트 실패")
-                    
-                    # 사이트 이름 업데이트
-                    if imweb_site_name and imweb_site_name != current_site_name:
-                        # 데이터베이스 업데이트
-                        update_success = await self.db_helper.update_site_name(user_id, site_code, imweb_site_name)
-                        update_results.append({
-                            "site_code": site_code,
-                            "success": update_success,
-                            "old_name": current_site_name,
-                            "new_name": imweb_site_name
-                        })
-                    else:
-                        update_results.append({
-                            "site_code": site_code,
-                            "success": True,
-                            "message": "사이트 이름이 이미 최신상태입니다."
-                        })
-                    
-                    # 유닛 코드 업데이트
-                    if imweb_unit_code and imweb_unit_code != current_unit_code:
-                        unit_update_success = await self.db_helper.update_site_unit_code(user_id, site_code, imweb_unit_code)
-                        if unit_update_success:
-                            logger.info(f"사이트 {site_code}의 유닛 코드를 {current_unit_code} -> {imweb_unit_code}로 업데이트 완료")
-                        else:
-                            logger.warning(f"사이트 {site_code}의 유닛 코드 업데이트 실패")
-                    elif imweb_unit_code == current_unit_code:
-                        logger.info(f"사이트 {site_code}의 유닛 코드가 이미 최신상태입니다: {current_unit_code}")
-                    else:
-                        logger.warning(f"사이트 {site_code}에서 유닛 코드를 찾을 수 없음")
-                    
-                else:
-                    update_results.append({
-                        "site_code": site_code,
-                        "success": False,
-                        "error": site_info_result["error"]
-                    })
+            # 연동 스크립트 생성
+            import os
+            server_base_url = os.getenv("SERVER_BASE_URL", "http://localhost:8000")
+            module_script = f"<script>document.head.appendChild(Object.assign(document.createElement('script'),{{'src':'{server_base_url}/api/v1/sites/{site_code}/script','type':'module'}}))</script>"
             
-            success_count = sum(1 for result in update_results if result["success"])
-            
-            return {
-                "success": True,
-                "message": f"{len(update_results)}개 사이트 중 {success_count}개 사이트 이름 업데이트 완료",
-                "results": update_results
-            }
-            
-        except Exception as e:
-            logger.error(f"사이트 이름 업데이트 실패: {e}")
-            return {"success": False, "error": str(e)}
-
-    async def refresh_imweb_token(self, refresh_token: str) -> Dict[str, Any]:
-        """
-        아임웹 리프레시 토큰을 사용하여 액세스 토큰 갱신
-        
-        Args:
-            refresh_token: 아임웹 리프레시 토큰
-            
-        Returns:
-            Dict: 갱신 결과 (성공/실패, 새 토큰 등)
-        """
-        try:
-            response = requests.post(
-                "https://openapi.imweb.me/oauth2/token",
-                data={
-                    "grantType": "refresh_token",
-                    "clientId": self.client_id,
-                    "clientSecret": self.client_secret,
-                    "refreshToken": refresh_token,
-                },
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded"
-                },
-                timeout=10
+            # 데이터베이스에 사이트 정보 저장
+            site_data = await self.db_helper.create_user_site(
+                user_id=user_id,
+                site_code=site_code,
+                site_name=normalized_domain,
+                domain=normalized_domain
             )
-
-            # 응답 상태 코드 확인
-            logger.warning(f"아임웹 토큰 갱신 요청: {response.status_code}")
             
-            if response.status_code == 200:
-                response_data = response.json()
-                if response_data.get("statusCode") == 200:
-                    token_data = response_data.get("data", {})
-                    logger.info(f"\n아임웹 토큰 갱신 성공: {token_data}\n")
-                    return {
-                        "success": True,
-                        "access_token": token_data.get("accessToken"),
-                        "refresh_token": token_data.get("refreshToken")
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "error": response_data.get("error", {}).get("message", "토큰 갱신 실패")
-                    }
-            else:
-                return {
-                    "success": False,
-                    "error": f"HTTP {response.status_code}: {response.text}"
+            if not site_data:
+                return {"success": False, "error": "사이트 생성에 실패했습니다."}
+            
+            # 로그 기록
+            await self.db_helper.log_system_event(
+                user_id=user_id,
+                event_type='website_added',
+                event_data={
+                    'site_code': site_code,
+                    'domain': normalized_domain,
+                    'method': 'domain_based'
                 }
-                
-        except Exception as e:
-            logger.error(f"아임웹 토큰 갱신 실패: {e}")
-            return {"success": False, "error": str(e)}
-
-    async def get_oauth_token(self, auth_code: str) -> Dict[str, Any]:
-        """
-        아임웹 OAuth 인가 코드를 사용하여 액세스 토큰 발급
-        
-        Args:
-            auth_code: OAuth 인가 코드
-            
-        Returns:
-            Dict: 토큰 발급 결과
-        """
-        try:
-            response = requests.post(
-                "https://openapi.imweb.me/oauth2/token",
-                data={
-                    "grantType": "authorization_code",
-                    "clientId": self.client_id,
-                    "clientSecret": self.client_secret,
-                    "code": auth_code,
-                    "redirectUri": self.redirect_uri,
-                },
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded"
-                },
-                timeout=10
             )
-            
-            if response.status_code != 200:
-                logger.error(f"아임웹 토큰 발급 요청 실패: {response.json()}")
-                return {"success": False, "error": "아임웹 토큰 발급 요청 실패"}
-            
-            response_data = response.json()
-            if response_data.get("statusCode") != 200:
-                logger.error(f"아임웹 토큰 발급 실패: {response_data}")
-                return {"success": False, "error": "아임웹 토큰 발급 실패"}
-            
-            token_data = response_data.get("data", {})
-            access_token = token_data.get("accessToken")
-            refresh_token = token_data.get("refreshToken")
-
-            if not access_token or not refresh_token:
-                return {"success": False, "error": "토큰 발급에 실패했습니다."}
             
             return {
                 "success": True,
-                "access_token": access_token,
-                "refresh_token": refresh_token
+                "data": {
+                    "site_code": site_code,
+                    "script": module_script,
+                    "domain": normalized_domain
+                }
             }
             
         except Exception as e:
-            logger.error(f"OAuth 토큰 발급 실패: {e}")
+            logger.error(f"웹사이트 추가 실패: {e}")
             return {"success": False, "error": str(e)}
 
-    async def fetch_site_unit_info(self, access_token: str, unit_code: str) -> Dict[str, Any]:
-        """
-        아임웹 API를 통해 특정 유닛의 상세 정보를 조회합니다.
-        
-        Args:
-            access_token: 아임웹 API 액세스 토큰
-            unit_code: 조회할 유닛 코드
-            
-        Returns:
-            Dict: 유닛 정보 (도메인 포함) 또는 에러 정보
-        """
-        try:
-            response = requests.get(
-                f"https://openapi.imweb.me/site-info/unit/{unit_code}",
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                },
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                response_data = response.json()
-                if response_data.get("statusCode") == 200:
-                    return {"success": True, "data": response_data.get("data", {})}
-                else:
-                    return {"success": False, "error": response_data.get("error", {}).get("message", "알 수 없는 오류")}
-            else:
-                return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
-                
-        except Exception as e:
-            logger.error(f"아임웹 유닛 정보 API 호출 실패: {e}")
-            return {"success": False, "error": str(e)}
-
-    async def complete_integration(self, access_token: str) -> Dict[str, Any]:
-        """
-        아임웹에 연동 완료 요청
-        
-        Args:
-            access_token: 아임웹 액세스 토큰
-            
-        Returns:
-            Dict: 연동 완료 결과
-        """
-        try:
-            response = requests.patch(
-                "https://openapi.imweb.me/site-info/integration-complete",
-                headers={
-                    "Authorization": f"Bearer {access_token}"
-                },
-                timeout=10
-            )
-            
-            if response.status_code != 200:
-                return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
-            
-            response_data = response.json()
-            if response_data.get("statusCode") != 200:
-                if response_data.get("statusCode") == 404:
-                    return {"success": False, "error": "이미 연동된 사이트입니다.", "error_code": 404}
-                return {"success": False, "error": "아임웹 연동 완료 요청 실패"}
-            
-            return {"success": True}
-            
-        except Exception as e:
-            logger.error(f"아임웹 연동 완료 실패: {e}")
-            return {"success": False, "error": str(e)}
