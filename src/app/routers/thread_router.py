@@ -224,7 +224,7 @@ async def create_message(
         site_code = request_data.get("site_code")
         auto_deploy = request_data.get("auto_deploy", False)
 
-        print(f"[ROUTER] create_message 요청 데이터: {site_code}")
+        print(f"[ROUTER] create_message 요청 데이터: site_code={site_code}")
 
         result = await thread_service.create_message(user.id, site_code, thread_id, message, message_type, metadata, auto_deploy)
         

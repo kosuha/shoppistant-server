@@ -42,7 +42,7 @@ class AIService:
         except (json.JSONDecodeError, TypeError):
             return {}
 
-    async def generate_gemini_response(self, chat_history: List[Dict], user_id: str, metadata: Optional[str] = None) -> Tuple[str, Optional[Dict]]:
+    async def generate_gemini_response(self, chat_history: List[Dict], user_id: str, metadata: Optional[str] = None, site_code: Optional[str] = None) -> Tuple[str, Optional[Dict]]:
         """
         대화 내역을 기반으로 두 단계 AI 응답을 생성합니다.
         1단계: MCP 도구를 사용하여 데이터 수집
@@ -52,21 +52,25 @@ class AIService:
             chat_history: 대화 내역 리스트
             user_id: 사용자 ID
             metadata: 메타데이터 (현재 스크립트 정보 포함 가능)
+            site_code: 클라이언트에서 선택된 사이트 코드
             
         Returns:
             tuple: (응답 텍스트, 메타데이터)
         """
         try:
-            # 사용자의 모든 사이트와 토큰 정보 가져오기
+            # 사용자의 모든 사이트 정보 가져오기
             user_sites = await self.db_helper.get_user_sites(user_id, user_id)
             if not user_sites:
                 logger.warning(f"사용자 {user_id}의 사이트 정보가 없습니다.")
-                return "아임웹 사이트가 연결되지 않았습니다. 먼저 사이트를 연결해주세요."
+                return "아임웹 사이트가 연결되지 않았습니다. 먼저 사이트를 연결해주세요.", None
+            
+            # 클라이언트에서 전달받은 사이트 코드 사용
+            logger.info(f"선택된 사이트 코드: {site_code}")
             
             # 세션 ID 생성
             session_id = str(uuid.uuid4())
             
-            # MCP 서버에 모든 사이트 정보 설정
+            # MCP 서버에 선택된 사이트 정보 설정
             # MCP 클라이언트 확인 및 대기
             logger.info(f"MCP 클라이언트 상태 확인: {self.mcp_client is not None}")
             if self.mcp_client is None:
@@ -75,34 +79,52 @@ class AIService:
             
             logger.info(f"MCP 클라이언트 타입: {type(self.mcp_client)}")
             if self.mcp_client:
-                print(f"세션 ID: {session_id}, 사용자 ID: {user_id}, 사이트 수: {len(user_sites)}")
-                logger.info(f"세션 ID: {session_id}, 사용자 ID: {user_id}, 사이트 수: {len(user_sites)}")
                 try:
-                    # 모든 사이트의 토큰 정보를 준비
-                    sites_data = []
-                    for site in user_sites:
-                        site_code = site.get('site_code')
-                        access_token = site.get('access_token')
-                        if site_code and access_token:
-                            # 토큰 복호화
-                            decrypted_token = self.db_helper._decrypt_token(access_token)
-                            sites_data.append({
-                                "site_name": site.get('site_name', site_code) or site_code,
-                                "site_code": site_code,
-                                "access_token": decrypted_token
-                            })
+                    # 선택된 사이트 정보 찾기
+                    selected_site = None
                     
-                    if not sites_data:
-                        return "아임웹 API 토큰이 설정되지 않았습니다. 먼저 토큰을 등록해주세요."
+                    if site_code:
+                        # 특정 사이트 코드로 필터링
+                        for site in user_sites:
+                            if site.get('site_code') == site_code:
+                                selected_site = site
+                                break
+                        
+                        if not selected_site:
+                            return f"사이트 코드 '{site_code}'에 해당하는 사이트를 찾을 수 없습니다.", None
+                    else:
+                        # 사이트 코드가 없으면 첫 번째 사이트 사용
+                        if user_sites:
+                            selected_site = user_sites[0]
                     
-                    # MCP 도구 호출
+                    if not selected_site:
+                        return "연결된 사이트 정보가 없습니다. 먼저 사이트를 연결해주세요.", None
+                    
+                    # 선택된 사이트의 도메인 정보 준비
+                    current_site_code = selected_site.get('site_code')
+                    domain = selected_site.get('primary_domain') or selected_site.get('domain')
+                    
+                    if not current_site_code or not domain:
+                        return "선택된 사이트에 필요한 정보(site_code, domain)가 없습니다.", None
+                    
+                    site_data = {
+                        "site_name": selected_site.get('site_name', current_site_code) or current_site_code,
+                        "site_code": current_site_code,
+                        "domain": domain
+                    }
+                    
+                    print(f"세션 ID: {session_id}, 사용자 ID: {user_id}, 선택된 사이트: {site_data}")
+                    logger.info(f"세션 ID: {session_id}, 사용자 ID: {user_id}, 선택된 사이트: {current_site_code}")
+                    
+                    # MCP 도구 호출 (단일 사이트 세션 설정)
                     await self.mcp_client.call_tool("set_session_token", {
                         "session_id": session_id,
                         "user_id": user_id,
-                        "sites": sites_data
+                        "site": site_data
                     })
                 except Exception as e:
-                    print(f"세션 토큰 설정 실패: {e}")
+                    print(f"세션 사이트 설정 실패: {e}")
+                    logger.error(f"세션 사이트 설정 실패: {e}")
                     return "세션 설정에 실패했습니다.", None
 
             # 대화 내역을 Gemini 형식으로 변환

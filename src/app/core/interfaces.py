@@ -43,7 +43,7 @@ class IAIService(ABC):
     """AI 서비스 인터페이스"""
     
     @abstractmethod
-    async def generate_gemini_response(self, chat_history: List[Dict], user_id: str, metadata: Optional[str] = None):
+    async def generate_gemini_response(self, chat_history: List[Dict], user_id: str, metadata: Optional[str] = None, site_code: Optional[str] = None):
         """Gemini AI 응답 생성"""
         pass
 

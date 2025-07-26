@@ -216,6 +216,7 @@ class ThreadService:
         
         Args:
             user_id: 사용자 ID
+            site_code: 사이트 코드
             thread_id: 스레드 ID
             message: 메시지 내용
             message_type: 메시지 타입 (user/assistant/system, 기본값: user)
@@ -280,8 +281,8 @@ class ThreadService:
                     # 스레드의 전체 대화 내역 조회 (새로 추가된 사용자 메시지 포함)
                     chat_history = await self.db_helper.get_thread_messages(user_id, thread_id)
                     
-                    # AI 응답 생성 (메타데이터 포함)
-                    ai_response_result = await self.ai_service.generate_gemini_response(chat_history, user_id, metadata)
+                    # AI 응답 생성 (메타데이터 및 사이트 코드 포함)
+                    ai_response_result = await self.ai_service.generate_gemini_response(chat_history, user_id, metadata, site_code)
                     
                     # AI 응답 결과 검증
                     if ai_response_result is None:

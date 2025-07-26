@@ -181,33 +181,28 @@ class ScriptService(BaseService, IScriptService):
         if not site:
             raise BusinessException("사이트를 찾을 수 없거나 접근 권한이 없습니다", "SITE_NOT_FOUND", 404)
         
-        # 액세스 토큰 및 유닛 코드 확인
-        access_token = site.get('access_token')
-        unit_code = site.get('unit_code')
-        
-        if not access_token:
-            raise BusinessException("사이트의 API 토큰이 설정되지 않았습니다", "TOKEN_NOT_SET", 400)
-        
-        if not unit_code:
-            raise BusinessException("사이트의 유닛 코드가 설정되지 않았습니다", "UNIT_CODE_NOT_SET", 400)
+        # OAuth 토큰이 제거되어 도메인 기반으로 처리
+        # 도메인 정보 확인
+        domain = site.get('primary_domain') or site.get('domain')
+        if not domain:
+            raise BusinessException("사이트의 도메인 정보가 설정되지 않았습니다", "DOMAIN_NOT_SET", 400)
         
         # 스크립트 데이터 처리
         if not scripts_data or not scripts_data.get('script', '').strip():
             # 빈 스크립트 - 삭제 처리
-            return await self._handle_script_deletion(user_id, site_code, access_token, unit_code)
+            return await self._handle_script_deletion(user_id, site_code)
         else:
             # 스크립트 배포 처리
             script_content = scripts_data.get('script', '')
-            return await self._handle_script_deployment(user_id, site_code, script_content, access_token, unit_code)
+            return await self._handle_script_deployment(user_id, site_code, script_content)
     
-    async def _handle_script_deletion(self, user_id: str, site_code: str, access_token: str, unit_code: str) -> Dict[str, Any]:
+    async def _handle_script_deletion(self, user_id: str, site_code: str) -> Dict[str, Any]:
         """스크립트 삭제 처리"""
         # DB에서 기존 스크립트 삭제 (비활성화)
         await self.db_helper.delete_site_script(user_id, site_code)
         
-        # 아임웹에서도 footer 스크립트 삭제
-        decrypted_token = self.db_helper._decrypt_token(access_token)
-        await self.deploy_script_to_imweb(decrypted_token, unit_code, "footer", method="DELETE")
+        # OAuth 토큰이 제거되어 아임웹 API 호출 불가, 로컬 DB에서만 삭제
+        # 아임웹 스크립트는 수동으로 제거해야 함
         
         from datetime import datetime
         deployed_at = datetime.now().isoformat() + "Z"
@@ -224,7 +219,7 @@ class ScriptService(BaseService, IScriptService):
             "message": "스크립트가 삭제되었습니다."
         }
     
-    async def _handle_script_deployment(self, user_id: str, site_code: str, script_content: str, access_token: str, unit_code: str) -> Dict[str, Any]:
+    async def _handle_script_deployment(self, user_id: str, site_code: str, script_content: str) -> Dict[str, Any]:
         """스크립트 배포 처리"""
         # 스크립트 검증
         validation_result = self.validate_script_content(script_content)
@@ -242,24 +237,13 @@ class ScriptService(BaseService, IScriptService):
         server_base_url = os.getenv("SERVER_BASE_URL", "http://localhost:8000")
         module_script = f"<script>document.head.appendChild(Object.assign(document.createElement('script'),{{'src':'{server_base_url}/api/v1/sites/{site_code}/script','type':'module'}}))</script>"
         
-        decrypted_token = self.db_helper._decrypt_token(access_token)
-        
-        # 먼저 PUT으로 기존 스크립트 수정 시도
-        deploy_result = await self.deploy_script_to_imweb(
-            decrypted_token, unit_code, "footer", module_script, method="PUT"
-        )
-        
-        if not deploy_result["success"]:
-            # PUT 실패시 POST로 새로운 스크립트 생성 시도
-            deploy_result = await self.deploy_script_to_imweb(
-                decrypted_token, unit_code, "footer", module_script, method="POST"
-            )
-            
-            if not deploy_result["success"]:
-                raise BusinessException(
-                    f"아임웹 스크립트 배포 실패: {deploy_result.get('error', '알 수 없는 오류')}",
-                    "IMWEB_DEPLOY_FAILED", 502
-                )
+        # OAuth 토큰이 제거되어 아임웹 API 직접 호출 불가
+        # 스크립트는 로컬 DB에 저장되고, 사용자가 수동으로 아임웹에 추가해야 함
+        deploy_result = {
+            "success": True,
+            "script": module_script,
+            "message": "스크립트가 로컬에 저장되었습니다. 아임웹 사이트 설정에서 수동으로 스크립트를 추가해주세요."
+        }
         
         from datetime import datetime
         deployed_at = datetime.now().isoformat() + "Z"
