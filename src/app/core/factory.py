@@ -15,7 +15,7 @@ from core.interfaces import (
 from database_helper import DatabaseHelper
 from services.auth_service import AuthService
 from services.script_service import ScriptService
-from services.imweb_service import WebsiteService
+from services.website_service import WebsiteService
 from services.ai_service import AIService
 from services.thread_service import ThreadService
 
@@ -77,7 +77,6 @@ class ServiceFactory:
         # 하위 호환성을 위한 구체 클래스도 등록
         container.register_service(AuthService, AuthService)
         container.register_service(ScriptService, ScriptService)
-        container.register_service(WebsiteService, WebsiteService)
         # AIService는 이미 위에서 싱글톤으로 등록됨
         container.register_service(ThreadService, ThreadService)
         
@@ -151,3 +150,8 @@ class ServiceFactory:
     def get_db_helper() -> IDatabaseHelper:
         """DB 헬퍼 조회"""
         return container.get(IDatabaseHelper)
+    
+    @staticmethod
+    def get_website_service() -> WebsiteService:
+        """웹사이트 서비스 조회"""
+        return container.get(WebsiteService)

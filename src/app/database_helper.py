@@ -257,6 +257,22 @@ class DatabaseHelper:
         except Exception as e:
             logger.error(f"사이트 이름 업데이트 실패: {e}")
             return False
+    
+    async def delete_site(self, user_id: str, site_id: str) -> bool:
+        """사이트 삭제"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('user_sites').delete().eq('user_id', user_id).eq('id', site_id).execute()
+            
+            if result.data:
+                logger.info(f"사이트 {site_id} 삭제 완료")
+                return True
+            else:
+                logger.warning(f"사이트 {site_id} 삭제 실패")
+                return False
+        except Exception as e:
+            logger.error(f"사이트 삭제 실패: {e}")
+            return False
 
     async def update_site_unit_code(self, user_id: str, site_code: str, unit_code: str) -> bool:
         """사이트 유닛 코드 업데이트"""

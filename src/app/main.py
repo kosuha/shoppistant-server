@@ -20,7 +20,7 @@ from core.responses import success_response, error_response
 # Legacy Services Import (기존 호환성)
 from services.auth_service import AuthService
 from services.ai_service import AIService
-from services.imweb_service import WebsiteService
+from services.website_service import WebsiteService
 from services.script_service import ScriptService
 from services.thread_service import ThreadService
 from database_helper import DatabaseHelper
@@ -68,6 +68,7 @@ db_helper = ServiceFactory.get_db_helper()
 auth_service = ServiceFactory.get_auth_service()
 ai_service = ServiceFactory.get_ai_service()
 imweb_service = ServiceFactory.get_imweb_service()
+website_service = ServiceFactory.get_website_service()
 script_service = ServiceFactory.get_script_service()
 thread_service = ServiceFactory.get_thread_service()
 

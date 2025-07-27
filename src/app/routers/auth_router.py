@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from services.auth_service import AuthService
-from services.imweb_service import WebsiteService
+from services.website_service import WebsiteService
 from database_helper import DatabaseHelper
 import logging
 

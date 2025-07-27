@@ -81,3 +81,88 @@ async def add_website(request: Request, user=Depends(get_current_user)):
             "status": "error",
             "message": str(e)
         })
+
+
+@websites_router.get("/websites")
+async def get_websites(user=Depends(get_current_user)):
+    """사용자의 웹사이트 목록 조회"""
+    from main import imweb_service
+    
+    try:
+        result = await imweb_service.get_sites(user.id)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=500, detail=result["error"])
+        
+        return JSONResponse(status_code=200, content={
+            "status": "success",
+            "data": result["data"]
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"웹사이트 목록 조회 실패: {e}")
+        return JSONResponse(status_code=500, content={
+            "status": "error",
+            "message": str(e)
+        })
+
+
+@websites_router.delete("/websites/{site_id}")
+async def delete_website(site_id: str, user=Depends(get_current_user)):
+    """웹사이트 삭제"""
+    from main import imweb_service
+    
+    try:
+        result = await imweb_service.delete_site(user.id, site_id)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=500, detail=result["error"])
+        
+        return JSONResponse(status_code=200, content={
+            "status": "success",
+            "message": "웹사이트가 성공적으로 삭제되었습니다."
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"웹사이트 삭제 실패: {e}")
+        return JSONResponse(status_code=500, content={
+            "status": "error",
+            "message": str(e)
+        })
+
+
+@websites_router.patch("/websites/{site_id}")
+async def update_website(site_id: str, request: Request, user=Depends(get_current_user)):
+    """웹사이트 정보 업데이트 (현재는 사이트 이름만 지원)"""
+    from main import imweb_service
+    
+    try:
+        request_data = await request.json()
+        site_name = request_data.get("site_name")
+        
+        if not site_name:
+            raise HTTPException(status_code=400, detail="site_name이 필요합니다.")
+        
+        result = await imweb_service.update_site_name(user.id, site_id, site_name)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=500, detail=result["error"])
+        
+        return JSONResponse(status_code=200, content={
+            "status": "success",
+            "data": result["data"],
+            "message": "웹사이트 정보가 성공적으로 업데이트되었습니다."
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"웹사이트 업데이트 실패: {e}")
+        return JSONResponse(status_code=500, content={
+            "status": "error",
+            "message": str(e)
+        })
