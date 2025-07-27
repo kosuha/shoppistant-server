@@ -3,6 +3,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
+import signal
+import asyncio
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from google import genai
@@ -74,6 +76,18 @@ thread_service = ServiceFactory.get_thread_service()
 
 security = HTTPBearer()
 
+# Graceful shutdown을 위한 글로벌 변수
+shutdown_event = asyncio.Event()
+
+def signal_handler(signum, frame):
+    """SIGINT (Ctrl+C) 및 SIGTERM 처리"""
+    logger.info(f"Signal {signum} received, initiating graceful shutdown...")
+    shutdown_event.set()
+
+# Signal handlers 등록
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # 시작 시 Playwright MCP 클라이언트 및 데이터베이스 초기화
@@ -114,6 +128,30 @@ async def lifespan(_app: FastAPI):
     yield
     
     # 종료 시 정리
+    logger.info("애플리케이션 종료 시작...")
+    
+    # SSE 연결 정리
+    try:
+        from routers.sse_router import cleanup_all_sse_connections
+        await cleanup_all_sse_connections()
+    except Exception as e:
+        logger.error(f"SSE 연결 정리 실패: {e}")
+    
+    # 실행 중인 asyncio task 정리
+    try:
+        tasks = [task for task in asyncio.all_tasks() if not task.done()]
+        if tasks:
+            logger.info(f"Cancelling {len(tasks)} remaining tasks...")
+            for task in tasks:
+                task.cancel()
+            
+            # task들이 정리될 때까지 잠시 대기
+            await asyncio.gather(*tasks, return_exceptions=True)
+            logger.info("All tasks cancelled successfully")
+    except Exception as e:
+        logger.error(f"Task cleanup 실패: {e}")
+    
+    # MCP 클라이언트 종료
     if mcp_client:
         try:
             await mcp_client.__aexit__(None, None, None)
@@ -130,6 +168,8 @@ async def lifespan(_app: FastAPI):
             )
         except Exception as e:
             logger.error(f"종료 로그 기록 실패: {e}")
+    
+    logger.info("애플리케이션 종료 완료")
 
 app = FastAPI(
     title="Imweb AI Agent Server", 
