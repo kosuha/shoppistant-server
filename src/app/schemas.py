@@ -3,7 +3,9 @@ AI 응답을 위한 구조화된 출력 스키마 정의
 Google Gemini의 구조화된 출력을 활용하여 스크립트 관련 응답을 정확하게 파싱합니다.
 """
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Literal
+from datetime import datetime
+import uuid
 
 class ScriptContent(BaseModel):
     """개별 스크립트 내용을 나타내는 모델"""
@@ -102,3 +104,48 @@ class ScriptModuleResponse(BaseModel):
         ..., 
         description="실제로 배포된 스크립트들"
     )
+
+# Message Status Types
+MessageStatus = Literal["pending", "in_progress", "completed", "error"]
+MessageType = Literal["user", "assistant", "system"]
+
+class ChatMessage(BaseModel):
+    """채팅 메시지 모델"""
+    id: str = Field(..., description="메시지 고유 ID")
+    thread_id: str = Field(..., description="스레드 ID")
+    user_id: str = Field(..., description="사용자 ID")
+    message: str = Field(..., description="메시지 내용")
+    message_type: MessageType = Field(..., description="메시지 타입")
+    status: MessageStatus = Field(default="completed", description="메시지 처리 상태")
+    metadata: Optional[Dict] = Field(default={}, description="메타데이터")
+    created_at: Optional[datetime] = Field(default=None, description="생성 시간")
+
+class ChatMessageCreate(BaseModel):
+    """새 메시지 생성 요청"""
+    message: str = Field(..., description="메시지 내용", min_length=1, max_length=2000)
+    message_type: MessageType = Field(default="user", description="메시지 타입")
+    status: MessageStatus = Field(default="pending", description="초기 메시지 상태")
+    metadata: Optional[Dict] = Field(default={}, description="메타데이터")
+
+class ChatMessageUpdate(BaseModel):
+    """메시지 상태 업데이트 요청"""
+    status: MessageStatus = Field(..., description="변경할 메시지 상태")
+    message: Optional[str] = Field(None, description="메시지 내용 (선택적)")
+    metadata: Optional[Dict] = Field(None, description="메타데이터 (선택적)")
+
+class ChatMessageResponse(BaseModel):
+    """메시지 응답"""
+    success: bool = Field(..., description="성공 여부")
+    data: Optional[ChatMessage] = Field(None, description="메시지 데이터")
+    message: Optional[str] = Field(None, description="응답 메시지")
+    error: Optional[str] = Field(None, description="오류 메시지")
+
+class ChatThread(BaseModel):
+    """채팅 스레드 모델"""
+    id: str = Field(..., description="스레드 ID")
+    user_id: str = Field(..., description="사용자 ID")
+    site_code: Optional[str] = Field(None, description="사이트 코드")
+    title: Optional[str] = Field(None, description="스레드 제목")
+    created_at: Optional[datetime] = Field(default=None, description="생성 시간")
+    updated_at: Optional[datetime] = Field(default=None, description="수정 시간")
+    last_message_at: Optional[datetime] = Field(default=None, description="마지막 메시지 시간")

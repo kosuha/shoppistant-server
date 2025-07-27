@@ -26,7 +26,7 @@ from services.thread_service import ThreadService
 from database_helper import DatabaseHelper
 
 # Routers Import
-from routers import auth_router, site_router, script_router, thread_router
+from routers import auth_router, site_router, script_router, thread_router, sse_router
 
 # 로깅 설정
 logging.basicConfig(
@@ -220,6 +220,7 @@ app.include_router(site_router.websites_router)  # 웹사이트 추가용 라우
 app.include_router(script_router.router)
 app.include_router(script_router.module_router)  # 스크립트 모듈 제공용 라우터 (인증 불필요)
 app.include_router(thread_router.router)
+app.include_router(sse_router.router)  # 실시간 메시지 상태 스트리밍
 
 if __name__ == "__main__":
     uvicorn.run(

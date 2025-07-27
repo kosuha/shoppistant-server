@@ -261,13 +261,14 @@ class ThreadService:
 
             print(f"[THREAD SERVICE] 스레드 제목 업데이트: {thread.get('title')}")
 
-            # 2. 사용자 메시지 저장
+            # 2. 사용자 메시지 저장 (사용자 메시지는 즉시 completed 상태)
             user_message = await self.db_helper.create_message(
                 requesting_user_id=user_id,
                 thread_id=thread_id,
                 message=message,
                 message_type=message_type,
-                metadata=metadata
+                metadata=metadata,
+                status='completed' if message_type == 'user' else 'pending'
             )
             print(f"[THREAD SERVICE] 사용자 메시지 저장 완료: {user_message}")
             
@@ -278,6 +279,27 @@ class ThreadService:
             ai_message = None
             if message_type == "user":
                 try:
+                    # 먼저 pending 상태의 AI 메시지 생성
+                    ai_message = await self.db_helper.create_message(
+                        requesting_user_id=user_id,
+                        thread_id=thread_id,
+                        message="",
+                        message_type="assistant",
+                        metadata=None,
+                        status='pending'
+                    )
+                    
+                    if ai_message:
+                        # 상태를 in_progress로 업데이트
+                        await self.db_helper.update_message_status(
+                            requesting_user_id=user_id,
+                            message_id=ai_message['id'],
+                            status='in_progress'
+                        )
+                        
+                        # SSE 브로드캐스트
+                        await self._broadcast_status_update(thread_id, ai_message['id'], 'in_progress')
+                    
                     # 스레드의 전체 대화 내역 조회 (새로 추가된 사용자 메시지 포함)
                     chat_history = await self.db_helper.get_thread_messages(user_id, thread_id)
                     
@@ -313,21 +335,35 @@ class ThreadService:
                             logger.warning(f"AI 메타데이터 직렬화 실패: {json_error}")
                             ai_metadata_json = None
                     
-                    # AI 응답 저장
-                    ai_message = await self.db_helper.create_message(
-                        requesting_user_id=user_id,
-                        thread_id=thread_id,
-                        message=ai_response,
-                        message_type="assistant",
-                        metadata=ai_metadata_json
-                    )
-                    
-                    if not ai_message:
-                        logger.warning("AI 응답 저장에 실패했습니다.")
+                    # AI 응답 완료 - 메시지 업데이트
+                    if ai_message:
+                        success = await self.db_helper.update_message_status(
+                            requesting_user_id=user_id,
+                            message_id=ai_message['id'],
+                            status='completed',
+                            message=ai_response,
+                            metadata=ai_metadata_json
+                        )
+                        if not success:
+                            logger.warning("AI 응답 업데이트에 실패했습니다.")
+                        else:
+                            # SSE 브로드캐스트 - 완료 상태
+                            await self._broadcast_status_update(thread_id, ai_message['id'], 'completed', ai_response)
+                    else:
+                        logger.warning("AI 메시지 생성에 실패했습니다.")
                         
                 except Exception as ai_error:
-                    # AI 응답 생성 실패는 에러를 던지지 않고 로그만 남김
+                    # AI 응답 생성 실패 시 에러 상태로 업데이트
                     logger.error(f"AI 응답 생성 실패: {str(ai_error)}")
+                    if ai_message:
+                        await self.db_helper.update_message_status(
+                            requesting_user_id=user_id,
+                            message_id=ai_message['id'],
+                            status='error',
+                            message=f"AI 응답 생성 중 오류가 발생했습니다: {str(ai_error)}"
+                        )
+                        # SSE 브로드캐스트 - 에러 상태
+                        await self._broadcast_status_update(thread_id, ai_message['id'], 'error', f"AI 응답 생성 중 오류가 발생했습니다: {str(ai_error)}")
 
             # 4. 로그 기록
             try:
@@ -358,3 +394,59 @@ class ThreadService:
         except Exception as e:
             logger.error(f"메시지 생성 실패: {e}")
             return {"success": False, "error": str(e), "status_code": 500}
+
+    async def update_message_status(self, user_id: str, message_id: str, status: str, 
+                                  message: str = None, metadata: dict = None) -> Dict[str, Any]:
+        """
+        메시지 상태를 업데이트합니다.
+        
+        Args:
+            user_id: 사용자 ID
+            message_id: 메시지 ID
+            status: 새로운 상태 ('pending', 'in_progress', 'completed', 'error')
+            message: 메시지 내용 (선택적)
+            metadata: 메타데이터 (선택적)
+            
+        Returns:
+            Dict: 업데이트 결과
+        """
+        try:
+            if status not in ["pending", "in_progress", "completed", "error"]:
+                return {"success": False, "error": "유효하지 않은 상태값입니다.", "status_code": 400}
+            
+            success = await self.db_helper.update_message_status(
+                requesting_user_id=user_id,
+                message_id=message_id,
+                status=status,
+                message=message,
+                metadata=metadata
+            )
+            
+            if not success:
+                return {"success": False, "error": "메시지 상태 업데이트에 실패했습니다.", "status_code": 500}
+            
+            # 로그 기록
+            await self.db_helper.log_system_event(
+                user_id=user_id,
+                event_type='message_status_updated',
+                event_data={'message_id': message_id, 'new_status': status}
+            )
+            
+            return {
+                "success": True,
+                "data": {"message_id": message_id, "status": status},
+                "message": "메시지 상태가 성공적으로 업데이트되었습니다."
+            }
+            
+        except Exception as e:
+            logger.error(f"메시지 상태 업데이트 실패: {e}")
+            return {"success": False, "error": str(e), "status_code": 500}
+
+    async def _broadcast_status_update(self, thread_id: str, message_id: str, status: str, message: str = None):
+        """메시지 상태 변화를 SSE 구독자들에게 브로드캐스트"""
+        try:
+            # 순환 import 방지를 위해 동적 import
+            from routers.sse_router import broadcast_message_status
+            await broadcast_message_status(thread_id, message_id, status, message)
+        except Exception as e:
+            logger.error(f"SSE 브로드캐스트 실패: {e}")

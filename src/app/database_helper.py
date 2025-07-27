@@ -158,7 +158,7 @@ class DatabaseHelper:
     
     # Chat Messages 관련 함수들
     async def create_message(self, requesting_user_id: str, thread_id: str, message: str, 
-                           message_type: str = 'user', metadata: Dict = None) -> Dict[str, Any]:
+                           message_type: str = 'user', metadata: Dict = None, status: str = 'completed') -> Dict[str, Any]:
         """새로운 메시지 생성"""
         try:
             # 스레드 소유권 확인
@@ -171,6 +171,7 @@ class DatabaseHelper:
                 'user_id': requesting_user_id,
                 'message': message,
                 'message_type': message_type,
+                'status': status,
                 'metadata': metadata or {}
             }
             
@@ -180,6 +181,39 @@ class DatabaseHelper:
         except Exception as e:
             logger.error(f"메시지 생성 실패: {e}")
             return {}
+    
+    async def update_message_status(self, requesting_user_id: str, message_id: str, status: str, 
+                                  message: str = None, metadata: Dict = None) -> bool:
+        """메시지 상태 업데이트"""
+        try:
+            # 메시지 소유권 확인
+            client = self._get_client(use_admin=True)
+            message_result = client.table('chat_messages').select('*').eq('id', message_id).execute()
+            
+            if not message_result.data:
+                return False
+                
+            message_data = message_result.data[0]
+            
+            # 스레드 소유권 확인
+            thread = await self.get_thread_by_id(requesting_user_id, message_data['thread_id'])
+            if not thread:
+                raise PermissionError("메시지에 접근할 권한이 없습니다.")
+            
+            # 업데이트할 데이터 준비
+            update_data = {'status': status}
+            if message is not None:
+                update_data['message'] = message
+            if metadata is not None:
+                update_data['metadata'] = metadata
+            
+            # 메시지 상태 업데이트
+            result = client.table('chat_messages').update(update_data).eq('id', message_id).execute()
+            return bool(result.data)
+            
+        except Exception as e:
+            logger.error(f"메시지 상태 업데이트 실패: {e}")
+            return False
     
     async def get_thread_messages(self, requesting_user_id: str, thread_id: str) -> List[Dict[str, Any]]:
         """스레드의 모든 메시지 조회"""
