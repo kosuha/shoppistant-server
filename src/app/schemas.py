@@ -3,7 +3,7 @@ AI 응답을 위한 구조화된 출력 스키마 정의
 Google Gemini의 구조화된 출력을 활용하여 스크립트 관련 응답을 정확하게 파싱합니다.
 """
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, List, Literal
+from typing import Optional, Dict, List, Literal, Any
 from datetime import datetime
 import uuid
 
@@ -149,3 +149,52 @@ class ChatThread(BaseModel):
     created_at: Optional[datetime] = Field(default=None, description="생성 시간")
     updated_at: Optional[datetime] = Field(default=None, description="수정 시간")
     last_message_at: Optional[datetime] = Field(default=None, description="마지막 메시지 시간")
+
+# Membership Types
+MembershipLevelType = Literal[0, 1, 2]
+
+class UserMembership(BaseModel):
+    """사용자 멤버십 모델"""
+    id: str = Field(..., description="멤버십 ID")
+    user_id: str = Field(..., description="사용자 ID")
+    membership_level: MembershipLevelType = Field(..., description="멤버십 레벨 (0:기본, 1:프리미엄, 2:프로)")
+    expires_at: Optional[datetime] = Field(None, description="만료일")
+    created_at: Optional[datetime] = Field(default=None, description="생성 시간")
+    updated_at: Optional[datetime] = Field(default=None, description="수정 시간")
+
+class MembershipStatus(BaseModel):
+    """멤버십 상태 모델"""
+    level: MembershipLevelType = Field(..., description="현재 멤버십 레벨")
+    expires_at: Optional[datetime] = Field(None, description="만료일")
+    is_expired: bool = Field(..., description="만료 여부")
+    days_remaining: Optional[int] = Field(None, description="남은 일수")
+
+class MembershipUpgradeRequest(BaseModel):
+    """멤버십 업그레이드 요청"""
+    target_level: MembershipLevelType = Field(..., description="목표 멤버십 레벨")
+    duration_days: int = Field(default=30, description="구독 기간 (일)", ge=1, le=365)
+
+class MembershipExtendRequest(BaseModel):
+    """멤버십 연장 요청"""
+    extend_days: int = Field(..., description="연장할 일수", ge=1, le=365)
+
+class MembershipResponse(BaseModel):
+    """멤버십 응답 모델"""
+    status: str = Field(..., description="응답 상태 (success/error)")
+    data: Optional[UserMembership] = Field(None, description="멤버십 데이터")
+    message: Optional[str] = Field(None, description="응답 메시지")
+    error_code: Optional[str] = Field(None, description="오류 코드")
+
+class MembershipStatusResponse(BaseModel):
+    """멤버십 상태 응답 모델"""
+    status: str = Field(..., description="응답 상태 (success/error)")
+    data: Optional[MembershipStatus] = Field(None, description="멤버십 상태 데이터")
+    message: Optional[str] = Field(None, description="응답 메시지")
+    error_code: Optional[str] = Field(None, description="오류 코드")
+
+class BatchCleanupResult(BaseModel):
+    """배치 정리 결과 모델"""
+    status: str = Field(..., description="응답 상태 (success/error)")
+    data: Optional[Any] = Field(None, description="정리 결과 데이터")
+    message: Optional[str] = Field(None, description="응답 메시지")
+    error_code: Optional[str] = Field(None, description="오류 코드")

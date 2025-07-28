@@ -28,7 +28,7 @@ from services.thread_service import ThreadService
 from database_helper import DatabaseHelper
 
 # Routers Import
-from routers import auth_router, site_router, script_router, thread_router, sse_router
+from routers import auth_router, site_router, script_router, thread_router, sse_router, membership_router
 
 # 로깅 설정
 logging.basicConfig(
@@ -73,6 +73,7 @@ imweb_service = ServiceFactory.get_imweb_service()
 website_service = ServiceFactory.get_website_service()
 script_service = ServiceFactory.get_script_service()
 thread_service = ServiceFactory.get_thread_service()
+membership_service = ServiceFactory.get_membership_service()
 
 security = HTTPBearer()
 
@@ -205,6 +206,9 @@ site_router.get_current_user = get_current_user
 script_router.get_current_user = get_current_user
 thread_router.get_current_user = get_current_user
 
+# 멤버십 라우터 의존성 설정 (멤버십 서비스만 설정, get_current_user는 직접 정의됨)
+membership_router.set_dependencies(None, membership_service)
+
 # 기본 엔드포인트
 @app.get("/")
 async def root():
@@ -264,6 +268,7 @@ app.include_router(script_router.router)
 app.include_router(script_router.module_router)  # 스크립트 모듈 제공용 라우터 (인증 불필요)
 app.include_router(thread_router.router)
 app.include_router(sse_router.router)  # 실시간 메시지 상태 스트리밍
+app.include_router(membership_router.router)  # 멤버십 관리 라우터
 
 if __name__ == "__main__":
     uvicorn.run(

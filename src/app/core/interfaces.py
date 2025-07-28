@@ -77,3 +77,36 @@ class IDatabaseHelper(ABC):
     async def log_system_event(self, event_type: str, event_data: Dict[str, Any], user_id: str = None):
         """시스템 이벤트 로깅"""
         pass
+
+class IMembershipService(ABC):
+    """멤버십 서비스 인터페이스"""
+    
+    @abstractmethod
+    async def get_user_membership(self, user_id: str) -> Dict[str, Any]:
+        """사용자 멤버십 정보 조회"""
+        pass
+    
+    @abstractmethod
+    async def upgrade_membership(self, user_id: str, target_level: int, duration_days: int = 30) -> Dict[str, Any]:
+        """멤버십 업그레이드"""
+        pass
+    
+    @abstractmethod
+    async def extend_membership(self, user_id: str, days: int) -> Dict[str, Any]:
+        """멤버십 기간 연장"""
+        pass
+    
+    @abstractmethod
+    async def check_permission(self, user_id: str, required_level: int) -> bool:
+        """사용자 권한 확인"""
+        pass
+    
+    @abstractmethod
+    async def get_membership_status(self, user_id: str) -> Dict[str, Any]:
+        """멤버십 상태 상세 조회"""
+        pass
+    
+    @abstractmethod
+    async def batch_cleanup_expired_memberships(self) -> Dict[str, Any]:
+        """만료된 멤버십 일괄 정리"""
+        pass

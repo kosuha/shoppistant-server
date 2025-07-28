@@ -626,3 +626,158 @@ class DatabaseHelper:
         except Exception as e:
             logger.error(f"기본 스크립트 데이터 생성 중 오류: {e}")
             # 스크립트 생성 실패해도 사이트 생성은 유지
+
+    # User Memberships 관련 함수들
+    async def get_user_membership(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """사용자 멤버십 정보 조회"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('user_memberships').select('*').eq('user_id', user_id).execute()
+            
+            if result.data:
+                membership = result.data[0]
+                # 만료일 체크
+                if membership.get('expires_at'):
+                    expires_at = datetime.fromisoformat(membership['expires_at'].replace('Z', '+00:00'))
+                    if expires_at < datetime.now().replace(tzinfo=expires_at.tzinfo):
+                        # 만료된 멤버십은 자동으로 기본 등급으로 다운그레이드
+                        await self._downgrade_expired_membership(user_id)
+                        membership['membership_level'] = 0
+                        membership['expires_at'] = None
+                
+                return membership
+            return None
+        except Exception as e:
+            logger.error(f"사용자 멤버십 조회 실패: {e}")
+            return None
+
+    async def create_user_membership(self, user_id: str, membership_level: int = 0, 
+                                   expires_at: datetime = None) -> Dict[str, Any]:
+        """새로운 사용자 멤버십 생성"""
+        try:
+            membership_data = {
+                'user_id': user_id,
+                'membership_level': membership_level,
+                'expires_at': expires_at.isoformat() if expires_at else None
+            }
+            
+            client = self._get_client(use_admin=True)
+            result = client.table('user_memberships').insert(membership_data).execute()
+            
+            if result.data:
+                logger.info(f"사용자 멤버십 생성 완료: user_id={user_id}, level={membership_level}")
+                return result.data[0]
+            return {}
+        except Exception as e:
+            logger.error(f"사용자 멤버십 생성 실패: {e}")
+            return {}
+
+    async def update_user_membership(self, user_id: str, membership_level: int, 
+                                   expires_at: datetime = None) -> bool:
+        """사용자 멤버십 업데이트"""
+        try:
+            update_data = {
+                'membership_level': membership_level,
+                'expires_at': expires_at.isoformat() if expires_at else None,
+                'updated_at': datetime.now().isoformat()
+            }
+            
+            client = self._get_client(use_admin=True)
+            result = client.table('user_memberships').update(update_data).eq('user_id', user_id).execute()
+            
+            if result.data:
+                logger.info(f"사용자 멤버십 업데이트 완료: user_id={user_id}, level={membership_level}")
+                return True
+            else:
+                logger.warning(f"사용자 멤버십 업데이트 실패: user_id={user_id}")
+                return False
+        except Exception as e:
+            logger.error(f"사용자 멤버십 업데이트 실패: {e}")
+            return False
+
+    async def ensure_user_membership(self, user_id: str) -> Dict[str, Any]:
+        """사용자 멤버십 존재 확인 및 생성 (없으면 기본 멤버십 생성)"""
+        try:
+            membership = await self.get_user_membership(user_id)
+            if not membership:
+                # 기본 멤버십 생성
+                membership = await self.create_user_membership(user_id, 0, None)
+                logger.info(f"기본 멤버십 생성: user_id={user_id}")
+            return membership
+        except Exception as e:
+            logger.error(f"사용자 멤버십 확인/생성 실패: {e}")
+            return {}
+
+    async def check_membership_level(self, user_id: str, required_level: int) -> bool:
+        """사용자가 특정 멤버십 레벨 이상인지 확인"""
+        try:
+            membership = await self.get_user_membership(user_id)
+            if not membership:
+                return required_level <= 0  # 기본 레벨(0)만 허용
+            
+            current_level = membership.get('membership_level', 0)
+            return current_level >= required_level
+        except Exception as e:
+            logger.error(f"멤버십 레벨 확인 실패: {e}")
+            return False
+
+    async def get_expired_memberships(self) -> List[Dict[str, Any]]:
+        """만료된 멤버십 목록 조회 (배치 작업용)"""
+        try:
+            current_time = datetime.now().isoformat()
+            client = self._get_client(use_admin=True)
+            result = client.table('user_memberships').select('*').lt('expires_at', current_time).gt('membership_level', 0).execute()
+            
+            return result.data or []
+        except Exception as e:
+            logger.error(f"만료된 멤버십 조회 실패: {e}")
+            return []
+
+    async def _downgrade_expired_membership(self, user_id: str) -> bool:
+        """만료된 멤버십을 기본 등급으로 다운그레이드"""
+        try:
+            update_data = {
+                'membership_level': 0,
+                'expires_at': None,
+                'updated_at': datetime.now().isoformat()
+            }
+            
+            client = self._get_client(use_admin=True)
+            result = client.table('user_memberships').update(update_data).eq('user_id', user_id).execute()
+            
+            if result.data:
+                logger.info(f"만료된 멤버십 다운그레이드 완료: user_id={user_id}")
+                # 시스템 로그 기록
+                await self.log_system_event(
+                    user_id=user_id,
+                    event_type='membership_downgrade',
+                    event_data={'reason': 'expired', 'new_level': 0}
+                )
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"멤버십 다운그레이드 실패: {e}")
+            return False
+
+    async def batch_downgrade_expired_memberships(self) -> int:
+        """만료된 모든 멤버십을 일괄 다운그레이드 (배치 작업용)"""
+        try:
+            expired_memberships = await self.get_expired_memberships()
+            downgraded_count = 0
+            
+            for membership in expired_memberships:
+                user_id = membership['user_id']
+                if await self._downgrade_expired_membership(user_id):
+                    downgraded_count += 1
+            
+            if downgraded_count > 0:
+                logger.info(f"배치 다운그레이드 완료: {downgraded_count}건 처리")
+                await self.log_system_event(
+                    event_type='batch_membership_downgrade',
+                    event_data={'downgraded_count': downgraded_count}
+                )
+            
+            return downgraded_count
+        except Exception as e:
+            logger.error(f"배치 멤버십 다운그레이드 실패: {e}")
+            return 0

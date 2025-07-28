@@ -10,7 +10,7 @@ from core.config import settings
 from core.container import container
 from core.interfaces import (
     IAuthService, IScriptService, IImwebService, 
-    IAIService, IThreadService, IDatabaseHelper
+    IAIService, IThreadService, IDatabaseHelper, IMembershipService
 )
 from database_helper import DatabaseHelper
 from services.auth_service import AuthService
@@ -18,6 +18,7 @@ from services.script_service import ScriptService
 from services.website_service import WebsiteService
 from services.ai_service import AIService
 from services.thread_service import ThreadService
+from services.membership_service import MembershipService
 
 logger = logging.getLogger(__name__)
 
@@ -73,12 +74,14 @@ class ServiceFactory:
         container.register_singleton(IAIService, ai_service)
         container.register_singleton(AIService, ai_service)
         container.register_service(IThreadService, ThreadService)
+        container.register_service(IMembershipService, MembershipService)
         
         # 하위 호환성을 위한 구체 클래스도 등록
         container.register_service(AuthService, AuthService)
         container.register_service(ScriptService, ScriptService)
         # AIService는 이미 위에서 싱글톤으로 등록됨
         container.register_service(ThreadService, ThreadService)
+        container.register_service(MembershipService, MembershipService)
         
         logger.info("의존성 주입 컨테이너 설정 완료")
     
@@ -155,3 +158,8 @@ class ServiceFactory:
     def get_website_service() -> WebsiteService:
         """웹사이트 서비스 조회"""
         return container.get(WebsiteService)
+    
+    @staticmethod
+    def get_membership_service() -> IMembershipService:
+        """멤버십 서비스 조회"""
+        return container.get(IMembershipService)
