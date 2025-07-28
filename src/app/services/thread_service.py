@@ -347,8 +347,8 @@ class ThreadService:
                         if not success:
                             logger.warning("AI 응답 업데이트에 실패했습니다.")
                         else:
-                            # SSE 브로드캐스트 - 완료 상태
-                            await self._broadcast_status_update(thread_id, ai_message['id'], 'completed', ai_response)
+                            # SSE 브로드캐스트 - 완료 상태 (메타데이터 포함)
+                            await self._broadcast_status_update(thread_id, ai_message['id'], 'completed', ai_response, ai_metadata)
                     else:
                         logger.warning("AI 메시지 생성에 실패했습니다.")
                         
@@ -442,11 +442,11 @@ class ThreadService:
             logger.error(f"메시지 상태 업데이트 실패: {e}")
             return {"success": False, "error": str(e), "status_code": 500}
 
-    async def _broadcast_status_update(self, thread_id: str, message_id: str, status: str, message: str = None):
+    async def _broadcast_status_update(self, thread_id: str, message_id: str, status: str, message: str = None, metadata: dict = None):
         """메시지 상태 변화를 SSE 구독자들에게 브로드캐스트"""
         try:
             # 순환 import 방지를 위해 동적 import
             from routers.sse_router import broadcast_message_status
-            await broadcast_message_status(thread_id, message_id, status, message)
+            await broadcast_message_status(thread_id, message_id, status, message, metadata)
         except Exception as e:
             logger.error(f"SSE 브로드캐스트 실패: {e}")

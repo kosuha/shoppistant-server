@@ -83,6 +83,9 @@ def signal_handler(signum, frame):
     """SIGINT (Ctrl+C) 및 SIGTERM 처리"""
     logger.info(f"Signal {signum} received, initiating graceful shutdown...")
     shutdown_event.set()
+    # 강제 종료를 위한 시스템 종료
+    import sys
+    sys.exit(0)
 
 # Signal handlers 등록
 signal.signal(signal.SIGINT, signal_handler)

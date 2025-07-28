@@ -107,13 +107,22 @@ async def stream_message_status(
             messages_result = await thread_service.get_thread_messages(user.id, thread_id)
             if messages_result["success"]:
                 for message in messages_result["data"]["messages"]:
+                    # metadata가 JSON 문자열이면 파싱
+                    metadata = message.get('metadata', {})
+                    if isinstance(metadata, str):
+                        try:
+                            metadata = json.loads(metadata)
+                        except (json.JSONDecodeError, TypeError):
+                            metadata = {}
+                    
                     yield f"data: {json.dumps({
                         'type': 'initial',
                         'message_id': message['id'],
                         'status': message.get('status', 'completed'),
                         'message': message['message'],
                         'message_type': message['message_type'],
-                        'created_at': message['created_at']
+                        'created_at': message['created_at'],
+                        'metadata': metadata
                     })}\n\n"
             
             # 구독자 목록에 추가
@@ -193,7 +202,7 @@ async def stream_message_status_options(thread_id: str):
 
 
 # 메시지 상태 브로드캐스트 함수
-async def broadcast_message_status(thread_id: str, message_id: str, status: str, message: str = None):
+async def broadcast_message_status(thread_id: str, message_id: str, status: str, message: str = None, metadata: dict = None):
     """메시지 상태 변화를 모든 구독자에게 브로드캐스트"""
     if thread_id in message_status_subscribers:
         status_update = {
@@ -201,6 +210,7 @@ async def broadcast_message_status(thread_id: str, message_id: str, status: str,
             'message_id': message_id,
             'status': status,
             'message': message,
+            'metadata': metadata or {},
             'timestamp': asyncio.get_event_loop().time()
         }
         
