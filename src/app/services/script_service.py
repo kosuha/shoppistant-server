@@ -48,81 +48,6 @@ class ScriptService(BaseService, IScriptService):
             warnings=warnings
         )
 
-    async def get_scripts_from_imweb(self, access_token: str, unit_code: str) -> Dict[str, Any]:
-        """아임웹 API를 통해 스크립트를 조회합니다."""
-        try:
-            response = requests.get(
-                "https://openapi.imweb.me/script",
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                },
-                params={
-                    "unitCode": unit_code
-                },
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                response_data = response.json()
-                scripts_list = response_data.get("data", [])
-                
-                # 위치별 스크립트 정리
-                scripts = {"header": "", "body": "", "footer": ""}
-                for script in scripts_list:
-                    position = script.get("position", "").lower()
-                    content = script.get("scriptContent", "")
-                    if position in scripts:
-                        scripts[position] = content
-                        
-                return {"success": True, "data": scripts}
-            else:
-                self.logger.error(f"아임웹 스크립트 조회 실패: {response.status_code} - {response.text}")
-                return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
-                
-        except Exception as e:
-            self.logger.error(f"아임웹 스크립트 조회 실패: {e}")
-            return {"success": False, "error": str(e)}
-
-    async def deploy_script_to_imweb(self, access_token: str, unit_code: str, position: str, script_content: str = None, method: str = "PUT") -> Dict[str, Any]:
-        """아임웹 API를 통해 스크립트를 배포합니다."""
-        self.logger.info(f"아임웹 스크립트 배포: position={position}, method={method}")
-        
-        try:
-            url = "https://openapi.imweb.me/script"
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json"
-            }
-            
-            if method == "DELETE":
-                params = {
-                    "unitCode": unit_code,
-                    "position": position
-                }
-                response = requests.delete(url, headers=headers, params=params, timeout=10)
-            else:
-                data = {
-                    "unitCode": unit_code,
-                    "position": position,
-                    "scriptContent": script_content
-                }
-                
-                if method == "PUT":
-                    response = requests.put(url, headers=headers, json=data, timeout=10)
-                else:
-                    response = requests.post(url, headers=headers, json=data, timeout=10)
-            
-            if response.status_code == 200:
-                response_data = response.json()
-                return {"success": True, "data": response_data.get("data", {})}
-            else:
-                self.logger.error(f"아임웹 스크립트 {method} 실패: {response.status_code} - {response.text}")
-                return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
-                
-        except Exception as e:
-            self.logger.error(f"아임웹 스크립트 {method} 실패: {e}")
-            return {"success": False, "error": str(e)}
-
     async def get_site_scripts(self, user_id: str, site_code: str) -> Dict[str, Any]:
         """특정 사이트의 현재 스크립트를 데이터베이스에서 조회합니다."""
         return await self.handle_operation(
@@ -232,7 +157,7 @@ class ScriptService(BaseService, IScriptService):
         if not script_record:
             raise BusinessException("스크립트 데이터베이스 저장 실패", "DB_SAVE_FAILED", 500)
         
-        # 2단계: 아임웹 footer에 모듈 스크립트 배포
+        # 2단계: 모듈 스크립트 배포
         import os
         server_base_url = os.getenv("SERVER_BASE_URL", "http://localhost:8000")
         module_script = f"<script>document.head.appendChild(Object.assign(document.createElement('script'),{{'src':'{server_base_url}/api/v1/sites/{site_code}/script','type':'module'}}))</script>"

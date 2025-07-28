@@ -77,6 +77,11 @@ class DatabaseHelper:
             
             client = self._get_client(use_admin=True)
             result = client.table('user_sites').insert(site_data).execute()
+            
+            # 사이트 생성 성공 시 기본 빈 스크립트 데이터도 생성
+            if result.data:
+                await self._create_default_script(user_id, site_code)
+            
             return result.data[0] if result.data else {}
         except Exception as e:
             logger.error(f"사이트 연결 생성 실패: {e}")
@@ -598,3 +603,26 @@ class DatabaseHelper:
         except Exception as e:
             logger.error(f"사이트 도메인 조회 실패: {e}")
             return None
+    
+    async def _create_default_script(self, user_id: str, site_code: str) -> None:
+        """사이트 생성 시 기본 빈 스크립트 데이터 생성"""
+        try:
+            script_data = {
+                'user_id': user_id,
+                'site_code': site_code,
+                'script_content': '',
+                'version': 1,
+                'is_active': True
+            }
+            
+            client = self._get_client(use_admin=True)
+            result = client.table('site_scripts').insert(script_data).execute()
+            
+            if result.data:
+                logger.info(f"기본 스크립트 데이터 생성 완료: site_code={site_code}")
+            else:
+                logger.warning(f"기본 스크립트 데이터 생성 실패: site_code={site_code}")
+                
+        except Exception as e:
+            logger.error(f"기본 스크립트 데이터 생성 중 오류: {e}")
+            # 스크립트 생성 실패해도 사이트 생성은 유지
