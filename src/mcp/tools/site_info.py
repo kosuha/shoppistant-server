@@ -11,7 +11,6 @@ class SiteInfo:
         self._register_tools()
     
     def _register_tools(self):
-        self.mcp.tool(self.get_site_info)
         self.mcp.tool(self.get_site_html_structure)
         self.mcp.tool(self.execute_console_log)
     
