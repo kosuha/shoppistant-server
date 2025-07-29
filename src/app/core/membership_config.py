@@ -39,12 +39,12 @@ class MembershipConfig:
         MembershipLevel.BASIC: MembershipFeatures(
             ai_model="gemini-2.5-flash",
             thinking_budget=-1,
-            daily_requests=20,
+            daily_requests=50,
             max_sites=4,
             is_image_uploads=True,
         ),
         MembershipLevel.PREMIUM: MembershipFeatures(
-            ai_model="gemini-2.5-flash",
+            ai_model="gemini-2.5-pro",
             thinking_budget=-1,  # 무제한
             daily_requests=100,
             max_sites=10,
