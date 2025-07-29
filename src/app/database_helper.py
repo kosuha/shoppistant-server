@@ -401,37 +401,9 @@ class DatabaseHelper:
             }
     
     # Site Scripts 관련 함수들
-    async def create_site_script(self, user_id: str, site_code: str, script_content: str) -> Dict[str, Any]:
-        """새로운 사이트 스크립트 생성"""
-        try:
-            # 사용자가 해당 사이트에 접근 권한이 있는지 확인
-            site = await self.get_user_site_by_code(user_id, site_code)
-            if not site:
-                raise PermissionError("사이트에 접근할 권한이 없습니다.")
-            
-            # 기존 활성 스크립트가 있다면 비활성화
-            await self._deactivate_existing_scripts(user_id, site_code)
-            
-            # 새 버전 계산
-            version = await self._get_next_version(user_id, site_code)
-            
-            script_data = {
-                'user_id': user_id,
-                'site_code': site_code,
-                'script_content': script_content,
-                'version': version,
-                'is_active': True
-            }
-            
-            client = self._get_client(use_admin=True)
-            result = client.table('site_scripts').insert(script_data).execute()
-            return result.data[0] if result.data else {}
-        except Exception as e:
-            logger.error(f"사이트 스크립트 생성 실패: {e}")
-            return {}
     
     async def update_site_script(self, user_id: str, site_code: str, script_content: str) -> Dict[str, Any]:
-        """사이트 스크립트 업데이트"""
+        """사이트 스크립트 업데이트 (기존 스크립트 수정 또는 새로 생성)"""
         try:
             # 사용자가 해당 사이트에 접근 권한이 있는지 확인
             site = await self.get_user_site_by_code(user_id, site_code)
@@ -448,28 +420,28 @@ class DatabaseHelper:
             
             client = self._get_client(use_admin=True)
             
-            # 기존 활성 스크립트가 있으면 덮어쓰기
             if current_script:
+                # 기존 활성 스크립트가 있으면 내용만 수정
                 script_id = current_script['id']
                 result = client.table('site_scripts').update({
                     'script_content': script_content,
                     'updated_at': datetime.now().isoformat()
                 }).eq('id', script_id).execute()
-                logger.info(f"사이트 스크립트 덮어쓰기 완료: site_code={site_code}, script_id={script_id}")
+                logger.info(f"기존 스크립트 수정 완료: site_code={site_code}, script_id={script_id}")
                 return result.data[0] if result.data else {}
             else:
-                # 기존 스크립트가 없으면 새로 생성
-                version = await self._get_next_version(user_id, site_code)
+                # 활성 스크립트가 없으면 새로 생성
                 script_data = {
                     'user_id': user_id,
                     'site_code': site_code,
                     'script_content': script_content,
-                    'version': version,
+                    'version': 1,
                     'is_active': True
                 }
                 result = client.table('site_scripts').insert(script_data).execute()
-                logger.info(f"새 사이트 스크립트 생성 완료: site_code={site_code}, version={version}")
+                logger.info(f"새 스크립트 생성 완료: site_code={site_code}")
                 return result.data[0] if result.data else {}
+            
         except Exception as e:
             logger.error(f"사이트 스크립트 업데이트 실패: {e}")
             return {}
@@ -556,6 +528,18 @@ class DatabaseHelper:
             logger.error(f"기존 스크립트 비활성화 실패: {e}")
             return False
     
+    async def _delete_existing_scripts(self, user_id: str, site_code: str) -> bool:
+        """기존 스크립트들을 모두 삭제 (unique constraint 문제 해결용)"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('site_scripts').delete().eq('user_id', user_id).eq('site_code', site_code).execute()
+            
+            logger.info(f"기존 스크립트 삭제 완료: site_code={site_code}, count={len(result.data) if result.data else 0}")
+            return True
+        except Exception as e:
+            logger.error(f"기존 스크립트 삭제 실패: {e}")
+            return False
+    
     async def _get_next_version(self, user_id: str, site_code: str) -> int:
         """다음 스크립트 버전 번호 계산"""
         try:
@@ -609,23 +593,24 @@ class DatabaseHelper:
                         # Free 사용자용 태그 스크립트
                         website_base_url = os.getenv("IMWEB_BASE_URL", "/")  # 실제 ImWeb URL로 변경
                         free_tag_script = f"""
-  var siteToppingLink = document.createElement('a');
-  siteToppingLink.href = '{website_base_url}';
-  siteToppingLink.innerText = 'powered by Site Topping';
-  siteToppingLink.target = '_blank';
-  siteToppingLink.style.position = 'fixed';
-  siteToppingLink.style.bottom = '0px';
-  siteToppingLink.style.left = '10px';
-  siteToppingLink.style.fontSize = '10px';
-  siteToppingLink.style.padding = '2px 4px';
-  siteToppingLink.style.backgroundColor = 'white';
-  siteToppingLink.style.border = '1px solid #ccc';
-  siteToppingLink.style.borderRadius = '5px 5px 0px 0px';
-  siteToppingLink.style.borderBottom = 'none';
-  siteToppingLink.style.zIndex = '9999';
-  siteToppingLink.style.textDecoration = 'none';
-  siteToppingLink.style.color = 'black';
-  document.body.appendChild(siteToppingLink);
+
+var siteToppingLink = document.createElement('a');
+siteToppingLink.href = '{website_base_url}';
+siteToppingLink.innerText = 'powered by Site Topping';
+siteToppingLink.target = '_blank';
+siteToppingLink.style.position = 'fixed';
+siteToppingLink.style.bottom = '0px';
+siteToppingLink.style.left = '10px';
+siteToppingLink.style.fontSize = '10px';
+siteToppingLink.style.padding = '2px 4px';
+siteToppingLink.style.backgroundColor = 'white';
+siteToppingLink.style.border = '1px solid #ccc';
+siteToppingLink.style.borderRadius = '5px 5px 0px 0px';
+siteToppingLink.style.borderBottom = 'none';
+siteToppingLink.style.zIndex = '9999';
+siteToppingLink.style.textDecoration = 'none';
+siteToppingLink.style.color = 'black';
+document.body.appendChild(siteToppingLink);
 """
                         
                         # 기존 스크립트 내용에 태그 스크립트 추가
