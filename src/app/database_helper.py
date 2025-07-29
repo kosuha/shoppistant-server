@@ -610,23 +610,24 @@ class DatabaseHelper:
                         website_base_url = os.getenv("IMWEB_BASE_URL", "/")  # 실제 ImWeb URL로 변경
                         free_tag_script = f"""
 (function() {{
-  var siteToppingLink = document.createElement('a');
+  const siteToppingLink = document.createElement('a');
   siteToppingLink.id = 'site-topping-link';
-  document.body.appendChild(siteToppingLink);
   siteToppingLink.href = '{website_base_url}';
-  siteToppingLink.innerText = 'Site Topping';
+  siteToppingLink.innerText = 'powered by Site Topping';
   siteToppingLink.target = '_blank';
   siteToppingLink.style.position = 'fixed';
-  siteToppingLink.style.bottom = '10px';
-  siteToppingLink.style.right = '10px';
-  siteToppingLink.style.fontSize = '12px';
-  siteToppingLink.style.padding = '5px 10px';
+  siteToppingLink.style.bottom = '0px';
+  siteToppingLink.style.left = '10px';
+  siteToppingLink.style.fontSize = '10px';
+  siteToppingLink.style.padding = '2px 4px';
   siteToppingLink.style.backgroundColor = 'white';
   siteToppingLink.style.border = '1px solid #ccc';
-  siteToppingLink.style.borderRadius = '0';
+  siteToppingLink.style.borderRadius = '5px 5px 0px 0px';
+  siteToppingLink.style.borderBottom = 'none';
   siteToppingLink.style.zIndex = '9999';
   siteToppingLink.style.textDecoration = 'none';
   siteToppingLink.style.color = 'black';
+  document.body.appendChild(siteToppingLink);
 }})();
 """
                         
