@@ -118,6 +118,7 @@ class ChatMessage(BaseModel):
     message_type: MessageType = Field(..., description="메시지 타입")
     status: MessageStatus = Field(default="completed", description="메시지 처리 상태")
     metadata: Optional[Dict] = Field(default={}, description="메타데이터")
+    image_data: Optional[List[str]] = Field(default=None, description="이미지 데이터 배열 (Base64 형식)")
     created_at: Optional[datetime] = Field(default=None, description="생성 시간")
 
 class ChatMessageCreate(BaseModel):
@@ -126,6 +127,7 @@ class ChatMessageCreate(BaseModel):
     message_type: MessageType = Field(default="user", description="메시지 타입")
     status: MessageStatus = Field(default="pending", description="초기 메시지 상태")
     metadata: Optional[Dict] = Field(default={}, description="메타데이터")
+    image_data: Optional[List[str]] = Field(default=None, description="이미지 데이터 배열 (Base64 형식)")
 
 class ChatMessageUpdate(BaseModel):
     """메시지 상태 업데이트 요청"""

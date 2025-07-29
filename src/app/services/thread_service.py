@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from services.script_service import ScriptService
 from database_helper import DatabaseHelper
 from services.ai_service import AIService
@@ -208,7 +208,7 @@ class ThreadService:
             logger.error(f"메시지 조회 실패: {e}")
             return {"success": False, "error": str(e), "status_code": 500}
 
-    async def create_message(self, user_id: str, site_code: str, thread_id: str, message: str, message_type: str = "user", metadata: Optional[str] = None, auto_deploy: bool = False) -> Dict[str, Any]:
+    async def create_message(self, user_id: str, site_code: str, thread_id: str, message: str, message_type: str = "user", metadata: Optional[str] = None, auto_deploy: bool = False, image_data: Optional[List[str]] = None) -> Dict[str, Any]:
         print(f"[THREAD SERVICE] create_message 메시지 생성 요청: user={user_id}, thread={thread_id}, type={message_type} message={message[:50]} metadata={metadata} auto_deploy={auto_deploy}")
         """
         새로운 메시지를 생성합니다.
@@ -222,6 +222,7 @@ class ThreadService:
             message_type: 메시지 타입 (user/assistant/system, 기본값: user)
             metadata: 메타데이터 (선택사항)
             auto_deploy: 자동 배포 여부 (기본값: False)
+            image_data: 이미지 데이터 배열 (Base64 형식, 선택사항)
             
         Returns:
             Dict: 메시지 생성 결과
@@ -268,7 +269,8 @@ class ThreadService:
                 message=message,
                 message_type=message_type,
                 metadata=metadata,
-                status='completed' if message_type == 'user' else 'pending'
+                status='completed' if message_type == 'user' else 'pending',
+                image_data=image_data
             )
             print(f"[THREAD SERVICE] 사용자 메시지 저장 완료: {user_message}")
             
@@ -303,8 +305,8 @@ class ThreadService:
                     # 스레드의 전체 대화 내역 조회 (새로 추가된 사용자 메시지 포함)
                     chat_history = await self.db_helper.get_thread_messages(user_id, thread_id)
                     
-                    # AI 응답 생성 (메타데이터 및 사이트 코드 포함)
-                    ai_response_result = await self.ai_service.generate_gemini_response(chat_history, user_id, metadata, site_code)
+                    # AI 응답 생성 (메타데이터 및 사이트 코드, 이미지 데이터 포함)
+                    ai_response_result = await self.ai_service.generate_gemini_response(chat_history, user_id, metadata, site_code, image_data)
                     
                     # AI 응답 결과 검증
                     if ai_response_result is None:

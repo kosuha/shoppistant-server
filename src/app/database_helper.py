@@ -163,7 +163,8 @@ class DatabaseHelper:
     
     # Chat Messages 관련 함수들
     async def create_message(self, requesting_user_id: str, thread_id: str, message: str, 
-                           message_type: str = 'user', metadata: Dict = None, status: str = 'completed') -> Dict[str, Any]:
+                           message_type: str = 'user', metadata: Dict = None, status: str = 'completed', 
+                           image_data: List[str] = None) -> Dict[str, Any]:
         """새로운 메시지 생성"""
         try:
             # 스레드 소유권 확인
@@ -177,7 +178,8 @@ class DatabaseHelper:
                 'message': message,
                 'message_type': message_type,
                 'status': status,
-                'metadata': metadata or {}
+                'metadata': metadata or {},
+                'image_data': image_data
             }
             
             client = self._get_client(use_admin=True)

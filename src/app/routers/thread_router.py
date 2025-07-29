@@ -4,6 +4,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from services.thread_service import ThreadService
 from services.auth_service import AuthService
 from schemas import ChatMessageUpdate, ChatMessageResponse
+from utils.image_validator import ImageValidator
 import logging
 import json
 import asyncio
@@ -446,10 +447,15 @@ async def create_message(
         metadata = request_data.get("metadata")
         site_code = request_data.get("site_code")
         auto_deploy = request_data.get("auto_deploy", False)
+        image_data = request_data.get("image_data")
 
         print(f"[ROUTER] create_message 요청 데이터: site_code={site_code}")
+        
+        # 이미지 데이터 검증
+        if image_data:
+            ImageValidator.validate_image_data(image_data)
 
-        result = await thread_service.create_message(user.id, site_code, thread_id, message, message_type, metadata, auto_deploy)
+        result = await thread_service.create_message(user.id, site_code, thread_id, message, message_type, metadata, auto_deploy, image_data)
         
         if not result["success"]:
             raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])

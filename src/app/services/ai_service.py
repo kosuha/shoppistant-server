@@ -1,4 +1,5 @@
 import uuid
+import base64
 from fastmcp import Client
 from google import genai
 from google.genai import types
@@ -42,7 +43,7 @@ class AIService:
         except (json.JSONDecodeError, TypeError):
             return {}
 
-    async def generate_gemini_response(self, chat_history: List[Dict], user_id: str, metadata: Optional[str] = None, site_code: Optional[str] = None) -> Tuple[str, Optional[Dict]]:
+    async def generate_gemini_response(self, chat_history: List[Dict], user_id: str, metadata: Optional[str] = None, site_code: Optional[str] = None, image_data: Optional[List[str]] = None) -> Tuple[str, Optional[Dict]]:
         """
         대화 내역을 기반으로 두 단계 AI 응답을 생성합니다.
         1단계: MCP 도구를 사용하여 데이터 수집
@@ -53,6 +54,7 @@ class AIService:
             user_id: 사용자 ID
             metadata: 메타데이터 (현재 스크립트 정보 포함 가능)
             site_code: 클라이언트에서 선택된 사이트 코드
+            image_data: 이미지 데이터 배열 (Base64 형식)
             
         Returns:
             tuple: (응답 텍스트, 메타데이터)
@@ -152,13 +154,13 @@ class AIService:
                 available_tools.append(self.mcp_client.session)
             
             # 두 단계 AI 요청 처리
-            return await self._two_stage_ai_response(current_scripts_info, conversation_context, available_tools, session_id)
+            return await self._two_stage_ai_response(current_scripts_info, conversation_context, available_tools, session_id, image_data)
 
         except Exception as e:
             logger.error(f"AI 응답 생성 실패: {e}")
             return f"AI 응답 생성 실패: {str(e)}", None
 
-    async def _two_stage_ai_response(self, current_scripts_info: str, conversation_context: str, available_tools: List, session_id: str) -> Tuple[str, Optional[Dict]]:
+    async def _two_stage_ai_response(self, current_scripts_info: str, conversation_context: str, available_tools: List, session_id: str, image_data: Optional[List[str]] = None) -> Tuple[str, Optional[Dict]]:
         """
         두 단계 AI 요청 처리
         1단계: MCP 도구 사용으로 데이터 수집
@@ -170,8 +172,58 @@ class AIService:
             if available_tools:
                 logger.info("1단계: MCP 도구를 사용하여 데이터 수집 시작")
                 
+                # 이미지 데이터 처리
+                image_parts = []
+                if image_data:
+                    for i, img_data in enumerate(image_data):
+                        try:
+                            logger.info(f"이미지 {i+1} 데이터 길이: {len(img_data) if img_data else 0}")
+                            
+                            # 데이터 형식 검증
+                            if not img_data or not isinstance(img_data, str):
+                                continue
+                            
+                            # 실제 데이터 내용 확인 (디버깅용)
+                            logger.info(f"이미지 {i+1} 실제 데이터: '{img_data[:100]}...'")
+                            
+                            # data:image/jpeg;base64, 형식 확인
+                            if not img_data.startswith('data:image/'):
+                                continue
+                            
+                            if ',' not in img_data:
+                                continue
+                            
+                            # 헤더와 데이터 분리
+                            parts = img_data.split(',', 1)
+                            if len(parts) != 2:
+                                continue
+                            
+                            header, base64_data = parts
+                            
+                            # MIME 타입 추출
+                            try:
+                                mime_type = header.split(':')[1].split(';')[0]
+                            except (IndexError, AttributeError):
+                                continue
+                            
+                            # Base64 디코딩
+                            try:
+                                image_bytes = base64.b64decode(base64_data)
+                            except Exception as decode_error:
+                                continue
+                            
+                            # Gemini API용 Part 생성
+                            image_parts.append(types.Part.from_bytes(
+                                data=image_bytes,
+                                mime_type=mime_type
+                            ))
+                            
+                        except Exception as e:
+                            logger.error(f"이미지 {i+1} 처리 중 예외 발생: {e}")
+                            continue
+                
                 # 도구 사용을 위한 프롬프트 (데이터 수집에 집중)
-                tool_prompt = f"""
+                tool_prompt_text = f"""
                 당신은 웹사이트 스크립트 작성을 도와주는 AI 어시스턴트, "Bren"입니다.
 
                 당신은 사용자의 마지막 요청을 해결하기 위한 상세한 계획을 세우고 필요한 데이터를 도구로 수집하여 스크립트를 작성하는 역할을 합니다.
@@ -216,6 +268,9 @@ class AIService:
                 # 대화 내역:
                 {conversation_context}
 
+                # 첨부된 이미지:
+                {f"사용자가 {len(image_data)}개의 이미지를 첨부했습니다. 이미지를 분석하여 사용자의 요청을 이해하세요." if image_data else "첨부된 이미지가 없습니다."}
+
                 # 세션 ID:
                 {session_id}
 
@@ -243,9 +298,14 @@ class AIService:
                 ```
                 """
                 
+                # contents 구성 (텍스트 + 이미지)
+                contents = [tool_prompt_text]
+                if image_parts:
+                    contents.extend(image_parts)
+                
                 tool_response = await self.gemini_client.aio.models.generate_content(
                     model="gemini-2.5-pro",
-                    contents=tool_prompt,
+                    contents=contents,
                     config=genai.types.GenerateContentConfig(
                         temperature=0.6,
                         tools=available_tools,
