@@ -7,10 +7,7 @@ from database_helper import DatabaseHelper
 logger = logging.getLogger(__name__)
 
 class WebsiteService:
-    def __init__(self, client_id: str, client_secret: str, redirect_uri: str, db_helper: DatabaseHelper):
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.redirect_uri = redirect_uri
+    def __init__(self, db_helper: DatabaseHelper):
         self.db_helper = db_helper
 
     async def add_website(self, user_id: str, domain: str) -> Dict[str, Any]:

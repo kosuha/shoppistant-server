@@ -1,12 +1,12 @@
 """
 데이터베이스 연결 및 CRUD 작업을 위한 헬퍼 모듈
 """
-import asyncio
+
 from typing import Dict, List, Optional, Any
 from datetime import datetime, date
-import uuid
 from supabase import Client
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -576,12 +576,66 @@ class DatabaseHelper:
             client = self._get_client(use_admin=True)
             result = client.table('site_scripts').select('*').eq('site_code', site_code).eq('is_active', True).execute()
             
+            script_data = None
             if result.data:
+                script_data = result.data[0]
                 logger.info(f"공개 스크립트 조회 성공: site_code={site_code}")
-                return result.data[0]
             else:
                 logger.info(f"공개 스크립트 없음: site_code={site_code}")
-                return None
+                # 스크립트가 없어도 Free 사용자용 태그를 위해 기본 구조 생성
+                script_data = {
+                    'site_code': site_code,
+                    'script_content': '',
+                    'user_id': None,
+                    'version': 1,
+                    'is_active': True
+                }
+            
+            # Free 사용자의 사이트인 경우 태그 스크립트 추가
+            if script_data:
+                # 사이트의 사용자 정보 조회
+                site_result = client.table('user_sites').select('user_id').eq('site_code', site_code).execute()
+                
+                if site_result.data:
+                    user_id = site_result.data[0]['user_id']
+                    
+                    # 사용자 멤버십 조회
+                    membership_result = client.table('user_memberships').select('membership_level').eq('user_id', user_id).execute()
+                    
+                    # 멤버십이 없거나 BASIC 레벨(0)인 경우 태그 스크립트 추가
+                    is_free_user = not membership_result.data or membership_result.data[0].get('membership_level', 0) == 0
+                    
+                    if is_free_user:
+                        # Free 사용자용 태그 스크립트
+                        website_base_url = os.getenv("IMWEB_BASE_URL", "/")  # 실제 ImWeb URL로 변경
+                        free_tag_script = f"""
+<script>
+(function() {{
+  var siteToppingLink = document.createElement('a');
+  siteToppingLink.id = 'site-topping-link';
+  document.body.appendChild(siteToppingLink);
+  siteToppingLink.href = '{website_base_url}';
+  siteToppingLink.innerText = 'Site Topping';
+  siteToppingLink.target = '_blank';
+  siteToppingLink.style.position = 'fixed';
+  siteToppingLink.style.bottom = '10px';
+  siteToppingLink.style.right = '10px';
+  siteToppingLink.style.fontSize = '12px';
+  siteToppingLink.style.padding = '5px 10px';
+  siteToppingLink.style.backgroundColor = 'white';
+  siteToppingLink.style.border = '1px solid #ccc';
+  siteToppingLink.style.borderRadius = '0';
+  siteToppingLink.style.zIndex = '9999';
+  siteToppingLink.style.textDecoration = 'none';
+  siteToppingLink.style.color = 'black';
+}})();
+</script>"""
+                        
+                        # 기존 스크립트 내용에 태그 스크립트 추가
+                        original_content = script_data.get('script_content', '')
+                        script_data['script_content'] = original_content + free_tag_script
+            
+            return script_data
         except Exception as e:
             logger.error(f"공개 사이트 스크립트 조회 실패: {e}")
             return None

@@ -106,7 +106,6 @@ class ScriptService(BaseService, IScriptService):
         if not site:
             raise BusinessException("사이트를 찾을 수 없거나 접근 권한이 없습니다", "SITE_NOT_FOUND", 404)
         
-        # OAuth 토큰이 제거되어 도메인 기반으로 처리
         # 도메인 정보 확인
         domain = site.get('primary_domain') or site.get('domain')
         if not domain:
@@ -125,9 +124,6 @@ class ScriptService(BaseService, IScriptService):
         """스크립트 삭제 처리"""
         # DB에서 기존 스크립트 삭제 (비활성화)
         await self.db_helper.delete_site_script(user_id, site_code)
-        
-        # OAuth 토큰이 제거되어 아임웹 API 호출 불가, 로컬 DB에서만 삭제
-        # 아임웹 스크립트는 수동으로 제거해야 함
         
         from datetime import datetime
         deployed_at = datetime.now().isoformat() + "Z"
@@ -157,37 +153,7 @@ class ScriptService(BaseService, IScriptService):
         if not script_record:
             raise BusinessException("스크립트 데이터베이스 저장 실패", "DB_SAVE_FAILED", 500)
         
-        # 2단계: 모듈 스크립트 배포
-        import os
-        server_base_url = os.getenv("SERVER_BASE_URL", "http://localhost:8000")
-        module_script = f"<script>document.head.appendChild(Object.assign(document.createElement('script'),{{'src':'{server_base_url}/api/v1/sites/{site_code}/script','type':'module'}}))</script>"
-        
-        # OAuth 토큰이 제거되어 아임웹 API 직접 호출 불가
-        # 스크립트는 로컬 DB에 저장되고, 사용자가 수동으로 아임웹에 추가해야 함
-        deploy_result = {
-            "success": True,
-            "script": module_script,
-            "message": "스크립트가 로컬에 저장되었습니다. 아임웹 사이트 설정에서 수동으로 스크립트를 추가해주세요."
-        }
-        
-        from datetime import datetime
-        deployed_at = datetime.now().isoformat() + "Z"
-        
-        await self.log_user_action(user_id, "script_deployed", {
-            "site_code": site_code,
-            "action": "deploy_script_with_module",
-            "script_version": script_record.get('version'),
-            "deployed_at": deployed_at,
-            "module_url": f"{server_base_url}/api/v1/sites/{site_code}/script"
-        })
-        
         return {
-            "deployed_at": deployed_at,
             "site_code": site_code,
-            "script_version": script_record.get('version'),
-            "module_url": f"{server_base_url}/api/v1/sites/{site_code}/script",
-            "deployed_scripts": {
-                "script": script_record.get('script_content', ''),
-            },
-            "message": "스크립트가 데이터베이스에 저장되고 아임웹에 모듈 형태로 배포되었습니다."
+            "message": "스크립트가 데이터베이스에 저장되고 모듈 형태로 배포되었습니다."
         }

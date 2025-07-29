@@ -57,9 +57,6 @@ class ServiceFactory:
         
         # ImwebService는 설정값이 필요하므로 직접 생성
         imweb_service = WebsiteService(
-            settings.IMWEB_CLIENT_ID,
-            settings.IMWEB_CLIENT_SECRET, 
-            settings.IMWEB_REDIRECT_URI,
             db_helper
         )
         container.register_singleton(IImwebService, imweb_service)

@@ -17,7 +17,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 @router.get("", response_model=None)  
 async def get_user_sites(user=Depends(get_current_user)):
     """사용자의 연결된 사이트 목록을 조회하는 API"""
-    from main import imweb_service, db_helper
+    from main import db_helper
     
     try:
         print(f"[ROUTER] 사용자 사이트 조회 요청: user={user}")

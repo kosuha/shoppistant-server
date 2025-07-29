@@ -360,6 +360,9 @@ class ThreadService:
                     membership_level = membership.get('membership_level', 0) if membership else 0
                     features = MembershipConfig.get_features(membership_level)
                     
+                    # skip_ai_generation 변수를 먼저 초기화
+                    skip_ai_generation = False
+                    
                     if features.daily_requests != -1:
                         current_count = await self.db_helper.get_daily_request_count(user_id)
                         if current_count >= features.daily_requests:
@@ -374,8 +377,6 @@ class ThreadService:
                             
                             # AI 응답 생성을 건너뛰고 바로 메시지 업데이트로 이동
                             skip_ai_generation = True
-                    else:
-                        skip_ai_generation = False
                     
                     if not skip_ai_generation:
                         # AI 응답 생성 (메타데이터 및 사이트 코드, 이미지 데이터 포함)
