@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from core.responses import success_response, error_response
+from core.membership_config import MembershipConfig
+from core.token_calculator import TokenUsageCalculator
 from schemas import (
     MembershipUpgradeRequest, 
     MembershipExtendRequest,
@@ -257,4 +259,328 @@ async def batch_cleanup_expired_memberships(
         return error_response(
             message="배치 정리 중 오류가 발생했습니다",
             error_code="BATCH_CLEANUP_ERROR"
+        )
+
+@router.get("/config")
+async def get_membership_config(
+    current_user = Depends(get_current_user)
+):
+    """현재 사용자의 멤버십 설정 정보 조회"""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="인증이 필요합니다")
+        
+        from main import db_helper
+        
+        # 멤버십 정보 조회
+        membership = await db_helper.get_user_membership(current_user.id)
+        membership_level = membership.get('membership_level', 0) if membership else 0
+        
+        # 멤버십 설정 정보 가져오기
+        membership_info = MembershipConfig.get_membership_info(membership_level)
+        
+        # 사용량 정보 추가
+        user_sites = await db_helper.get_user_sites(current_user.id, current_user.id)
+        current_sites = len(user_sites)
+        
+        # 업그레이드 정보
+        upgrade_info = MembershipConfig.get_next_level_benefits(membership_level)
+        
+        return success_response(
+            data={
+                **membership_info,
+                "usage": {
+                    "current_sites": current_sites,
+                    "expires_at": membership.get('expires_at') if membership else None,
+                    "created_at": membership.get('created_at') if membership else None,
+                    "updated_at": membership.get('updated_at') if membership else None
+                },
+                "upgrade_info": upgrade_info
+            },
+            message="멤버십 설정 정보 조회 성공"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"멤버십 설정 정보 조회 실패: {e}")
+        return error_response(
+            message="멤버십 설정 정보 조회 중 오류가 발생했습니다",
+            error_code="MEMBERSHIP_CONFIG_ERROR"
+        )
+
+@router.get("/features/{feature_name}")
+async def check_feature_access(
+    feature_name: str,
+    current_user = Depends(get_current_user)
+):
+    """특정 기능에 대한 접근 권한 확인"""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="인증이 필요합니다")
+        
+        from main import db_helper
+        
+        membership = await db_helper.get_user_membership(current_user.id)
+        membership_level = membership.get('membership_level', 0) if membership else 0
+        
+        # 기능 접근 권한 확인
+        has_access = MembershipConfig.can_use_feature(membership_level, feature_name)
+        
+        required_level = None
+        if not has_access:
+            # 필요한 최소 레벨 찾기
+            for level in range(membership_level + 1, 4):
+                if MembershipConfig.can_use_feature(level, feature_name):
+                    required_level = level
+                    break
+        
+        return success_response(
+            data={
+                "feature": feature_name,
+                "has_access": has_access,
+                "current_level": membership_level,
+                "required_level": required_level
+            },
+            message="기능 접근 권한 확인 완료"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"기능 접근 권한 확인 실패: {e}")
+        return error_response(
+            message="기능 접근 권한 확인 중 오류가 발생했습니다",
+            error_code="FEATURE_ACCESS_CHECK_ERROR"
+        )
+
+@router.get("/limits")
+async def get_membership_limits(
+    current_user = Depends(get_current_user)
+):
+    """멤버십별 제한사항 조회"""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="인증이 필요합니다")
+        
+        from main import db_helper
+        
+        membership = await db_helper.get_user_membership(current_user.id)
+        membership_level = membership.get('membership_level', 0) if membership else 0
+        
+        features = MembershipConfig.get_features(membership_level)
+        
+        # 현재 사용량 조회
+        user_sites = await db_helper.get_user_sites(current_user.id, current_user.id)
+        current_sites = len(user_sites)
+        
+        return success_response(
+            data={
+                "membership_level": membership_level,
+                "limits": {
+                    "daily_requests": features.daily_requests,
+                    "max_sites": features.max_sites,
+                    "max_image_uploads": features.max_image_uploads,
+                    "max_thread_history": features.max_thread_history,
+                    "concurrent_requests": features.concurrent_requests,
+                    "thinking_budget": features.thinking_budget
+                },
+                "usage": {
+                    "current_sites": current_sites
+                },
+                "ai_settings": {
+                    "model": features.ai_model,
+                    "thinking_budget": features.thinking_budget
+                }
+            },
+            message="멤버십 제한사항 조회 성공"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"멤버십 제한사항 조회 실패: {e}")
+        return error_response(
+            message="멤버십 제한사항 조회 중 오류가 발생했습니다",
+            error_code="MEMBERSHIP_LIMITS_ERROR"
+        )
+
+@router.get("/pricing/models")
+async def get_model_pricing():
+    """지원되는 AI 모델별 가격 정보 조회"""
+    try:
+        supported_models = TokenUsageCalculator.get_supported_models()
+        pricing_info = {}
+        
+        for model in supported_models:
+            pricing_info[model] = TokenUsageCalculator.get_model_pricing_info(model)
+        
+        return success_response(
+            data={
+                "supported_models": supported_models,
+                "pricing_info": pricing_info,
+                "currency": "USD per million tokens",
+                "exchange_rate": f"1 USD = {TokenUsageCalculator.USD_TO_KRW_RATE} KRW (approximate)"
+            },
+            message="모델별 가격 정보 조회 성공"
+        )
+        
+    except Exception as e:
+        logger.error(f"모델 가격 정보 조회 실패: {e}")
+        return error_response(
+            message="모델 가격 정보 조회 중 오류가 발생했습니다",
+            error_code="MODEL_PRICING_ERROR"
+        )
+
+@router.post("/pricing/estimate")
+async def estimate_cost(
+    request: dict,
+    current_user = Depends(get_current_user)
+):
+    """토큰 수에 따른 예상 비용 계산"""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="인증이 필요합니다")
+        
+        # 요청 파라미터 검증
+        input_tokens = request.get('input_tokens', 0)
+        output_tokens = request.get('output_tokens', 0)
+        model_name = request.get('model_name', 'gemini-2.5-pro')
+        input_type = request.get('input_type', 'text_image_video')
+        
+        if input_tokens < 0 or output_tokens < 0:
+            return error_response(
+                message="토큰 수는 음수일 수 없습니다",
+                error_code="INVALID_TOKEN_COUNT"
+            )
+        
+        # 단일 모델 비용 계산
+        if model_name and model_name != 'all':
+            cost_info = TokenUsageCalculator.estimate_cost(
+                input_tokens, output_tokens, model_name, input_type
+            )
+            
+            return success_response(
+                data=cost_info,
+                message=f"{model_name} 모델 예상 비용 계산 완료"
+            )
+        
+        # 모든 모델 비교
+        comparison = TokenUsageCalculator.compare_model_costs(
+            input_tokens, output_tokens, input_type
+        )
+        
+        return success_response(
+            data={
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "input_type": input_type,
+                "model_comparison": comparison
+            },
+            message="모든 모델 비용 비교 완료"
+        )
+        
+    except Exception as e:
+        logger.error(f"비용 예상 계산 실패: {e}")
+        return error_response(
+            message="비용 예상 계산 중 오류가 발생했습니다",
+            error_code="COST_ESTIMATION_ERROR"
+        )
+
+@router.get("/usage/models")
+async def get_model_usage_stats(
+    current_user = Depends(get_current_user),
+    days: int = 30
+):
+    """사용자의 AI 모델별 사용량 통계 조회"""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="인증이 필요합니다")
+        
+        from main import db_helper
+        
+        # 지정된 기간 내의 AI 메시지 조회
+        from datetime import datetime, timedelta
+        
+        cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+        
+        # AI 메시지만 조회 (assistant 타입이고 ai_model 정보가 있는 것)
+        client = db_helper._get_client(use_admin=True)
+        result = client.table('chat_messages').select(
+            'ai_model, cost_usd, created_at'
+        ).eq('user_id', current_user.id).eq('message_type', 'assistant').gte(
+            'created_at', cutoff_date
+        ).not_.is_('ai_model', 'null').execute()
+        
+        # 모델별 통계 계산
+        model_stats_dict = {}
+        total_messages = 0
+        total_cost = 0.0
+        
+        if result.data:
+            for row in result.data:
+                model = row['ai_model']
+                cost = float(row['cost_usd'] or 0)
+                created_at = row['created_at']
+                
+                if model not in model_stats_dict:
+                    model_stats_dict[model] = {
+                        "model": model,
+                        "message_count": 0,
+                        "total_cost_usd": 0.0,
+                        "costs": [],
+                        "first_used": created_at,
+                        "last_used": created_at
+                    }
+                
+                model_stats_dict[model]["message_count"] += 1
+                model_stats_dict[model]["total_cost_usd"] += cost
+                model_stats_dict[model]["costs"].append(cost)
+                
+                # 날짜 업데이트
+                if created_at < model_stats_dict[model]["first_used"]:
+                    model_stats_dict[model]["first_used"] = created_at
+                if created_at > model_stats_dict[model]["last_used"]:
+                    model_stats_dict[model]["last_used"] = created_at
+                
+                total_messages += 1
+                total_cost += cost
+        
+        # 평균 계산 및 정리
+        model_stats = []
+        for stats in model_stats_dict.values():
+            avg_cost = sum(stats["costs"]) / len(stats["costs"]) if stats["costs"] else 0
+            final_stats = {
+                "model": stats["model"],
+                "message_count": stats["message_count"],
+                "total_cost_usd": round(stats["total_cost_usd"], 6),
+                "avg_cost_usd": round(avg_cost, 6),
+                "total_cost_krw": round(stats["total_cost_usd"] * TokenUsageCalculator.USD_TO_KRW_RATE, 2),
+                "first_used": stats["first_used"],
+                "last_used": stats["last_used"]
+            }
+            model_stats.append(final_stats)
+        
+        # 비용 순으로 정렬
+        model_stats.sort(key=lambda x: x["total_cost_usd"], reverse=True)
+        
+        return success_response(
+            data={
+                "period_days": days,
+                "total_messages": total_messages,
+                "total_cost_usd": round(total_cost, 6),
+                "total_cost_krw": round(total_cost * TokenUsageCalculator.USD_TO_KRW_RATE, 2),
+                "model_stats": model_stats,
+                "query_date": datetime.now().isoformat()
+            },
+            message=f"최근 {days}일간 모델별 사용량 통계 조회 성공"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"모델 사용량 통계 조회 실패: {e}")
+        return error_response(
+            message="모델 사용량 통계 조회 중 오류가 발생했습니다",
+            error_code="MODEL_USAGE_STATS_ERROR"
         )

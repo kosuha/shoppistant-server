@@ -164,7 +164,7 @@ class DatabaseHelper:
     # Chat Messages 관련 함수들
     async def create_message(self, requesting_user_id: str, thread_id: str, message: str, 
                            message_type: str = 'user', metadata: Dict = None, status: str = 'completed', 
-                           image_data: List[str] = None) -> Dict[str, Any]:
+                           image_data: List[str] = None, cost_usd: float = 0.0, ai_model: str = None) -> Dict[str, Any]:
         """새로운 메시지 생성"""
         try:
             # 스레드 소유권 확인
@@ -179,7 +179,9 @@ class DatabaseHelper:
                 'message_type': message_type,
                 'status': status,
                 'metadata': metadata or {},
-                'image_data': image_data
+                'image_data': image_data,
+                'cost_usd': cost_usd,
+                'ai_model': ai_model
             }
             
             client = self._get_client(use_admin=True)
@@ -190,7 +192,7 @@ class DatabaseHelper:
             return {}
     
     async def update_message_status(self, requesting_user_id: str, message_id: str, status: str, 
-                                  message: str = None, metadata: Dict = None) -> bool:
+                                  message: str = None, metadata: Dict = None, cost_usd: float = None, ai_model: str = None) -> bool:
         """메시지 상태 업데이트"""
         try:
             # 메시지 소유권 확인
@@ -213,6 +215,10 @@ class DatabaseHelper:
                 update_data['message'] = message
             if metadata is not None:
                 update_data['metadata'] = metadata
+            if cost_usd is not None:
+                update_data['cost_usd'] = cost_usd
+            if ai_model is not None:
+                update_data['ai_model'] = ai_model
             
             # 메시지 상태 업데이트
             result = client.table('chat_messages').update(update_data).eq('id', message_id).execute()

@@ -8,6 +8,8 @@ import json
 import logging
 from database_helper import DatabaseHelper
 from schemas import AIScriptResponse
+from core.membership_config import MembershipConfig
+from core.token_calculator import TokenUsageCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,10 @@ class AIService:
             tuple: (응답 텍스트, 메타데이터)
         """
         try:
+            # 사용자 멤버십 정보 조회
+            membership = await self.db_helper.get_user_membership(user_id)
+            membership_level = membership.get('membership_level', 0) if membership else 0
+            
             # 사용자의 모든 사이트 정보 가져오기
             user_sites = await self.db_helper.get_user_sites(user_id, user_id)
             if not user_sites:
@@ -153,20 +159,26 @@ class AIService:
             if self.mcp_client:
                 available_tools.append(self.mcp_client.session)
             
-            # 두 단계 AI 요청 처리
-            return await self._two_stage_ai_response(current_scripts_info, conversation_context, available_tools, session_id, image_data)
+            # 두 단계 AI 요청 처리 (멤버십 레벨 포함)
+            return await self._two_stage_ai_response(current_scripts_info, conversation_context, available_tools, session_id, image_data, membership_level)
 
         except Exception as e:
             logger.error(f"AI 응답 생성 실패: {e}")
             return f"AI 응답 생성 실패: {str(e)}", None
 
-    async def _two_stage_ai_response(self, current_scripts_info: str, conversation_context: str, available_tools: List, session_id: str, image_data: Optional[List[str]] = None) -> Tuple[str, Optional[Dict]]:
+    async def _two_stage_ai_response(self, current_scripts_info: str, conversation_context: str, available_tools: List, session_id: str, image_data: Optional[List[str]] = None, membership_level: int = 0) -> Tuple[str, Optional[Dict]]:
         """
         두 단계 AI 요청 처리
         1단계: MCP 도구 사용으로 데이터 수집
         2단계: thinking 설정으로 구조화된 출력 생성
         """
         try:
+            # 멤버십별 AI 모델 및 설정 가져오기
+            ai_model = MembershipConfig.get_ai_model(membership_level)
+            thinking_budget = MembershipConfig.get_thinking_budget(membership_level)
+            
+            logger.info(f"멤버십 레벨 {membership_level}: AI 모델={ai_model}, 사고 예산={thinking_budget}")
+            
             # 1단계: MCP 도구가 필요한 경우 도구 사용
             structured_response = ""
             if available_tools:
@@ -209,7 +221,7 @@ class AIService:
                             # Base64 디코딩
                             try:
                                 image_bytes = base64.b64decode(base64_data)
-                            except Exception as decode_error:
+                            except Exception:
                                 continue
                             
                             # Gemini API용 Part 생성
@@ -304,15 +316,32 @@ class AIService:
                 if image_parts:
                     contents.extend(image_parts)
                 
+                # 멤버십에 따른 thinking 설정
+                thinking_config_params = {"thinking_budget": thinking_budget} if thinking_budget != -1 else {"thinking_budget": -1}
+                
                 tool_response = await self.gemini_client.aio.models.generate_content(
-                    model="gemini-2.5-pro",
+                    model=ai_model,
                     contents=contents,
                     config=genai.types.GenerateContentConfig(
                         temperature=0.6,
                         tools=available_tools,
-                        thinking_config=types.ThinkingConfig(thinking_budget=-1)
+                        thinking_config=types.ThinkingConfig(**thinking_config_params)
                     )
                 )
+
+                print("#########\n", tool_response)
+                
+                # 토큰 사용량 및 비용 계산
+                token_info = None
+                if hasattr(tool_response, 'usage_metadata') and tool_response.usage_metadata:
+                    # 멤버십에 따른 모델명으로 비용 계산
+                    token_info = TokenUsageCalculator.calculate_cost(
+                        tool_response.usage_metadata, 
+                        model_name=ai_model,
+                        input_type="text_image_video"  # 기본값, 오디오 처리 시 변경 가능
+                    )
+                    logger.info(f"토큰 사용량 [{ai_model}] - 총: {token_info['total_tokens']}, 입력: {token_info['input_tokens']}, 출력: {token_info['output_tokens']}, 사고: {token_info['thoughts_tokens']}")
+                    logger.info(f"비용 - USD: ${token_info['total_cost_usd']}, KRW: ₩{token_info['total_cost_krw']}")
                 
                 # 도구 사용 응답에서 데이터 추출
                 if hasattr(tool_response, 'text') and tool_response.text:
@@ -420,6 +449,12 @@ class AIService:
                 response_metadata = {
                     'script_updates': script_updates
                 }
+            
+            # 응답에 토큰 정보 추가
+            if token_info:
+                if not response_metadata:
+                    response_metadata = {}
+                response_metadata['token_usage'] = token_info
             
             logger.info(f"2단계 완료: 메시지 {len(response_text)}자, 메타데이터: {bool(response_metadata)}")
             return response_text, response_metadata

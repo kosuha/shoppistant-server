@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional, List
 from services.script_service import ScriptService
 from database_helper import DatabaseHelper
 from services.ai_service import AIService
+from core.membership_config import MembershipConfig
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,64 @@ class ThreadService:
         self.db_helper = db_helper
         self.ai_service = ai_service
         self.script_service = script_service
+    
+    async def _check_membership_limits(self, user_id: str, action: str, **kwargs) -> Dict[str, Any]:
+        """멤버십 제한사항 확인"""
+        try:
+            # 사용자 멤버십 정보 조회
+            membership = await self.db_helper.get_user_membership(user_id)
+            membership_level = membership.get('membership_level', 0) if membership else 0
+            
+            features = MembershipConfig.get_features(membership_level)
+            
+            # 이미지 업로드 수 제한 확인
+            if action == 'image_upload':
+                image_count = kwargs.get('image_count', 0)
+                if image_count > features.max_image_uploads:
+                    return {
+                        "allowed": False,
+                        "error": f"멤버십 레벨 {membership_level}에서는 최대 {features.max_image_uploads}개의 이미지만 업로드할 수 있습니다.",
+                        "limit": features.max_image_uploads,
+                        "current": image_count
+                    }
+            
+            # 자동 배포 기능 확인
+            elif action == 'auto_deploy':
+                if not features.auto_deploy:
+                    return {
+                        "allowed": False,
+                        "error": "자동 배포 기능은 BASIC 등급 이상에서만 사용할 수 있습니다.",
+                        "required_level": 1
+                    }
+            
+            # 고급 도구 사용 확인
+            elif action == 'advanced_tools':
+                if not features.advanced_tools:
+                    return {
+                        "allowed": False,
+                        "error": "고급 도구 기능은 PREMIUM 등급 이상에서만 사용할 수 있습니다.",
+                        "required_level": 2
+                    }
+            
+            # 사이트 연결 수 제한 확인
+            elif action == 'site_connection':
+                if features.max_sites != -1:
+                    user_sites = await self.db_helper.get_user_sites(user_id, user_id)
+                    current_sites = len(user_sites)
+                    if current_sites >= features.max_sites:
+                        return {
+                            "allowed": False,
+                            "error": f"멤버십 레벨 {membership_level}에서는 최대 {features.max_sites}개의 사이트만 연결할 수 있습니다.",
+                            "limit": features.max_sites,
+                            "current": current_sites
+                        }
+            
+            return {"allowed": True, "membership_level": membership_level, "features": features}
+            
+        except Exception as e:
+            logger.error(f"멤버십 제한 확인 실패: {e}")
+            # 에러 시 기본 등급으로 처리
+            return {"allowed": True, "membership_level": 0}
 
     async def create_thread(self, user_id: str, site_code: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -243,6 +302,17 @@ class ThreadService:
 
             print(f"[THREAD SERVICE] 스레드 소유확인")
 
+            # 멤버십 제한사항 확인
+            if image_data:
+                limit_check = await self._check_membership_limits(user_id, 'image_upload', image_count=len(image_data))
+                if not limit_check.get('allowed', True):
+                    return {"success": False, "error": limit_check['error'], "status_code": 403}
+            
+            if auto_deploy:
+                limit_check = await self._check_membership_limits(user_id, 'auto_deploy')
+                if not limit_check.get('allowed', True):
+                    return {"success": False, "error": limit_check['error'], "status_code": 403}
+
             # 1. 중복 메시지 검사
             if message_type == "user":
                 is_duplicate = await self.db_helper.check_duplicate_message(user_id, thread_id, message, message_type)
@@ -337,14 +407,23 @@ class ThreadService:
                             logger.warning(f"AI 메타데이터 직렬화 실패: {json_error}")
                             ai_metadata_json = None
                     
-                    # AI 응답 완료 - 메시지 업데이트
+                    # AI 응답 완료 - 메시지 업데이트 (비용 및 모델 정보 포함)
                     if ai_message:
+                        # 토큰 비용 정보 및 모델 정보 추출
+                        cost_usd = 0.0
+                        ai_model = None
+                        if ai_metadata and 'token_usage' in ai_metadata:
+                            cost_usd = ai_metadata['token_usage'].get('total_cost_usd', 0.0)
+                            ai_model = ai_metadata['token_usage'].get('model_name', None)
+                        
                         success = await self.db_helper.update_message_status(
                             requesting_user_id=user_id,
                             message_id=ai_message['id'],
                             status='completed',
                             message=ai_response,
-                            metadata=ai_metadata_json
+                            metadata=ai_metadata_json,
+                            cost_usd=cost_usd,
+                            ai_model=ai_model
                         )
                         if not success:
                             logger.warning("AI 응답 업데이트에 실패했습니다.")
