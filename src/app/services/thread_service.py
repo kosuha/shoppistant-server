@@ -24,33 +24,13 @@ class ThreadService:
             
             features = MembershipConfig.get_features(membership_level)
             
-            # 이미지 업로드 수 제한 확인
+            # 이미지 업로드 가능 여부 확인
             if action == 'image_upload':
-                image_count = kwargs.get('image_count', 0)
-                if image_count > features.max_image_uploads:
+                if not features.is_image_uploads:
                     return {
                         "allowed": False,
-                        "error": f"멤버십 레벨 {membership_level}에서는 최대 {features.max_image_uploads}개의 이미지만 업로드할 수 있습니다.",
-                        "limit": features.max_image_uploads,
-                        "current": image_count
-                    }
-            
-            # 자동 배포 기능 확인
-            elif action == 'auto_deploy':
-                if not features.auto_deploy:
-                    return {
-                        "allowed": False,
-                        "error": "자동 배포 기능은 BASIC 등급 이상에서만 사용할 수 있습니다.",
+                        "error": f"멤버십 레벨 {membership_level}에서는 이미지 업로드가 허용되지 않습니다.",
                         "required_level": 1
-                    }
-            
-            # 고급 도구 사용 확인
-            elif action == 'advanced_tools':
-                if not features.advanced_tools:
-                    return {
-                        "allowed": False,
-                        "error": "고급 도구 기능은 PREMIUM 등급 이상에서만 사용할 수 있습니다.",
-                        "required_level": 2
                     }
             
             # 사이트 연결 수 제한 확인
@@ -375,18 +355,47 @@ class ThreadService:
                     # 스레드의 전체 대화 내역 조회 (새로 추가된 사용자 메시지 포함)
                     chat_history = await self.db_helper.get_thread_messages(user_id, thread_id)
                     
-                    # AI 응답 생성 (메타데이터 및 사이트 코드, 이미지 데이터 포함)
-                    ai_response_result = await self.ai_service.generate_gemini_response(chat_history, user_id, metadata, site_code, image_data)
+                    # 일일 요청 제한 확인
+                    membership = await self.db_helper.get_user_membership(user_id)
+                    membership_level = membership.get('membership_level', 0) if membership else 0
+                    features = MembershipConfig.get_features(membership_level)
                     
-                    # AI 응답 결과 검증
-                    if ai_response_result is None:
-                        raise ValueError("AI 서비스에서 None을 반환했습니다.")
-                    
-                    # 튜플 언패킹
-                    if isinstance(ai_response_result, tuple) and len(ai_response_result) == 2:
-                        ai_response, ai_metadata = ai_response_result
+                    if features.daily_requests != -1:
+                        current_count = await self.db_helper.get_daily_request_count(user_id)
+                        if current_count >= features.daily_requests:
+                            # 제한 초과 시 AI 응답 대신 안내 메시지 전송
+                            limit_message = f"죄송합니다. 오늘의 메시지 전송 횟수({features.daily_requests}회)를 모두 사용하셨습니다.\n\n" \
+                                          f"내일 0시에 요청 횟수가 초기화됩니다.\n" \
+                                          f"더 많은 메시지를 보내시려면 요금제를 업그레이드해주세요!"
+                            
+                            # 제한 안내 메시지로 AI 응답 대체
+                            ai_response = limit_message
+                            ai_metadata = {"rate_limited": True, "daily_limit": features.daily_requests}
+                            
+                            # AI 응답 생성을 건너뛰고 바로 메시지 업데이트로 이동
+                            skip_ai_generation = True
                     else:
-                        raise ValueError(f"AI 서비스에서 예상치 못한 형태의 응답을 받았습니다: {type(ai_response_result)}")
+                        skip_ai_generation = False
+                    
+                    if not skip_ai_generation:
+                        # AI 응답 생성 (메타데이터 및 사이트 코드, 이미지 데이터 포함)
+                        ai_response_result = await self.ai_service.generate_gemini_response(chat_history, user_id, metadata, site_code, image_data)
+                        
+                        # 일일 요청 수 증가 (정상 AI 응답인 경우에만)
+                        await self.db_helper.increment_daily_request(user_id, 'message_send')
+                    
+                    # AI 응답 결과 처리
+                    if not skip_ai_generation:
+                        # AI 응답 결과 검증
+                        if ai_response_result is None:
+                            raise ValueError("AI 서비스에서 None을 반환했습니다.")
+                        
+                        # 튜플 언패킹
+                        if isinstance(ai_response_result, tuple) and len(ai_response_result) == 2:
+                            ai_response, ai_metadata = ai_response_result
+                        else:
+                            raise ValueError(f"AI 서비스에서 예상치 못한 형태의 응답을 받았습니다: {type(ai_response_result)}")
+                    # skip_ai_generation이 True인 경우 ai_response와 ai_metadata는 이미 설정됨
                     
                     if ai_metadata and auto_deploy:
                         if not isinstance(ai_metadata, dict):

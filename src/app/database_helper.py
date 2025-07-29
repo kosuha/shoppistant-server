@@ -3,7 +3,7 @@
 """
 import asyncio
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, date
 import uuid
 from supabase import Client
 import logging
@@ -788,4 +788,113 @@ class DatabaseHelper:
             return downgraded_count
         except Exception as e:
             logger.error(f"배치 멤버십 다운그레이드 실패: {e}")
+            return 0
+    
+    # Daily Request Tracking 관련 함수들
+    async def increment_daily_request(self, user_id: str, endpoint: str = None) -> bool:
+        """사용자의 일일 요청 수 증가"""
+        try:
+            today = date.today().isoformat()
+            client = self._get_client(use_admin=True)
+            
+            # 기존 레코드가 있는지 확인
+            existing = client.table('daily_request_logs').select('*').eq(
+                'user_id', user_id
+            ).eq('request_date', today).execute()
+            
+            if existing.data:
+                # 기존 레코드 업데이트
+                new_count = existing.data[0]['request_count'] + 1
+                result = client.table('daily_request_logs').update({
+                    'request_count': new_count,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('user_id', user_id).eq('request_date', today).execute()
+            else:
+                # 새 레코드 생성
+                result = client.table('daily_request_logs').insert({
+                    'user_id': user_id,
+                    'request_date': today,
+                    'request_count': 1,
+                    'endpoint': endpoint
+                }).execute()
+            
+            return bool(result.data)
+        except Exception as e:
+            logger.error(f"일일 요청 수 증가 실패: {e}")
+            return False
+    
+    async def get_daily_request_count(self, user_id: str, target_date: date = None) -> int:
+        """사용자의 특정 날짜 요청 수 조회"""
+        try:
+            if target_date is None:
+                target_date = date.today()
+            
+            date_str = target_date.isoformat()
+            client = self._get_client(use_admin=True)
+            
+            result = client.table('daily_request_logs').select('request_count').eq(
+                'user_id', user_id
+            ).eq('request_date', date_str).execute()
+            
+            return result.data[0]['request_count'] if result.data else 0
+        except Exception as e:
+            logger.error(f"일일 요청 수 조회 실패: {e}")
+            return 0
+    
+    async def check_daily_request_limit(self, user_id: str, limit: int) -> Dict[str, Any]:
+        """사용자의 일일 요청 제한 확인"""
+        try:
+            current_count = await self.get_daily_request_count(user_id)
+            
+            return {
+                'current_count': current_count,
+                'limit': limit,
+                'remaining': max(0, limit - current_count),
+                'exceeded': current_count >= limit,
+                'reset_time': datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            }
+        except Exception as e:
+            logger.error(f"일일 요청 제한 확인 실패: {e}")
+            return {
+                'current_count': 0,
+                'limit': limit,
+                'remaining': limit,
+                'exceeded': False,
+                'error': str(e)
+            }
+    
+    async def get_user_request_history(self, user_id: str, days: int = 7) -> List[Dict[str, Any]]:
+        """사용자의 최근 요청 히스토리 조회"""
+        try:
+            from datetime import timedelta
+            
+            start_date = (date.today() - timedelta(days=days-1)).isoformat()
+            client = self._get_client(use_admin=True)
+            
+            result = client.table('daily_request_logs').select('*').eq(
+                'user_id', user_id
+            ).gte('request_date', start_date).order('request_date', desc=True).execute()
+            
+            return result.data if result.data else []
+        except Exception as e:
+            logger.error(f"사용자 요청 히스토리 조회 실패: {e}")
+            return []
+    
+    async def cleanup_old_request_logs(self, days_to_keep: int = 30) -> int:
+        """오래된 요청 로그 정리 (배치 작업용)"""
+        try:
+            from datetime import timedelta
+            
+            cutoff_date = (date.today() - timedelta(days=days_to_keep)).isoformat()
+            client = self._get_client(use_admin=True)
+            
+            result = client.table('daily_request_logs').delete().lt(
+                'request_date', cutoff_date
+            ).execute()
+            
+            deleted_count = len(result.data) if result.data else 0
+            logger.info(f"오래된 요청 로그 {deleted_count}개 정리 완료")
+            return deleted_count
+        except Exception as e:
+            logger.error(f"요청 로그 정리 실패: {e}")
             return 0

@@ -17,6 +17,8 @@ from fastmcp import Client as MCPClient
 from core.config import settings
 from core.factory import ServiceFactory
 from core.middleware import setup_exception_handlers
+# from core.rate_limit_middleware import RateLimitMiddleware  # 미들웨어 제거
+from core.scheduler import initialize_scheduler, cleanup_scheduler
 from core.responses import success_response, error_response
 
 # Legacy Services Import (기존 호환성)
@@ -127,6 +129,14 @@ async def lifespan(_app: FastAPI):
     else:
         logger.warning("MCP 클라이언트 연결 실패 (일반 모드로 계속)")
     
+    # 백그라운드 스케줄러 초기화
+    if db_connected:
+        try:
+            await initialize_scheduler(db_helper)
+            logger.info("백그라운드 스케줄러 초기화 완료")
+        except Exception as e:
+            logger.error(f"백그라운드 스케줄러 초기화 실패: {e}")
+    
     logger.info("모든 서비스 인스턴스 초기화 완료")
     
     yield
@@ -154,6 +164,13 @@ async def lifespan(_app: FastAPI):
             logger.info("All tasks cancelled successfully")
     except Exception as e:
         logger.error(f"Task cleanup 실패: {e}")
+    
+    # 백그라운드 스케줄러 종료
+    try:
+        await cleanup_scheduler()
+        logger.info("백그라운드 스케줄러 종료 완료")
+    except Exception as e:
+        logger.error(f"백그라운드 스케줄러 종료 실패: {e}")
     
     # MCP 클라이언트 종료
     if mcp_client:
@@ -185,6 +202,8 @@ app = FastAPI(
 
 # 예외 처리 미들웨어 설정
 setup_exception_handlers(app)
+
+# 요청 제한 미들웨어 제거 - ThreadService에서 직접 처리
 
 # CORS 미들웨어 추가
 app.add_middleware(
