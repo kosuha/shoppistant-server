@@ -257,4 +257,3 @@ class SiteInfo:
                 "url": url,
                 "command": console_command
             }
-    
