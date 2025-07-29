@@ -609,7 +609,6 @@ class DatabaseHelper:
                         # Free 사용자용 태그 스크립트
                         website_base_url = os.getenv("IMWEB_BASE_URL", "/")  # 실제 ImWeb URL로 변경
                         free_tag_script = f"""
-<script>
 (function() {{
   var siteToppingLink = document.createElement('a');
   siteToppingLink.id = 'site-topping-link';
@@ -629,7 +628,7 @@ class DatabaseHelper:
   siteToppingLink.style.textDecoration = 'none';
   siteToppingLink.style.color = 'black';
 }})();
-</script>"""
+"""
                         
                         # 기존 스크립트 내용에 태그 스크립트 추가
                         original_content = script_data.get('script_content', '')
