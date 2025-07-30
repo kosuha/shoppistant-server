@@ -267,6 +267,7 @@ class DatabaseHelper:
     async def log_system_event(self, user_id: str = None, event_type: str = 'info', 
                              event_data: Dict = None, ip_address: str = None, 
                              user_agent: str = None) -> bool:
+        return True
         """시스템 이벤트 로그 기록"""
         try:
             log_data = {
