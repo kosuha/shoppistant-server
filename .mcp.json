@@ -27,6 +27,13 @@
         "SUPABASE_ACCESS_TOKEN": "${SUPABASE_ACCESS_TOKEN}",
         "SUPABASE_PROJECT_REF": "${SUPABASE_PROJECT_REF}"
       }
+    },
+    "portone-mcp-server": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@portone/mcp-server@latest"
+      ]
     }
   }
 }

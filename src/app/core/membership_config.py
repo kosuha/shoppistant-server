@@ -32,9 +32,9 @@ class MembershipConfig:
         MembershipLevel.FREE: MembershipFeatures(
             ai_model="gemini-2.5-flash-lite",
             thinking_budget=-1,  # 사고 토큰
-            daily_requests=10,
-            max_sites=1,
-            is_image_uploads=False  # 이미지 업로드 불가,
+            daily_requests=50,
+            max_sites=2,
+            is_image_uploads=True
         ),
         MembershipLevel.BASIC: MembershipFeatures(
             ai_model="gemini-2.5-flash",
