@@ -18,28 +18,28 @@ class Screenshot:
         self.mcp.tool(self.capture_element_screenshot)
     
     def get_session_data(self, session_id: str):
-        """세션 데이터를 가져오는 헬퍼 함수"""
+        """Helper function to get session data"""
         if self.session_tools:
             return self.session_tools.get_session_data(session_id)
         return None
 
     def _optimize_image(self, image_bytes: bytes, max_size_kb: int = 200, quality: int = 85) -> bytes:
         """
-        이미지를 최적화하여 크기를 줄입니다.
+        Optimize image to reduce size.
         
         Args:
-            image_bytes: 원본 이미지 바이트
-            max_size_kb: 최대 크기 (KB)
-            quality: JPEG 품질 (1-100)
+            image_bytes: Original image bytes
+            max_size_kb: Maximum size (KB)
+            quality: JPEG quality (1-100)
             
         Returns:
-            bytes: 최적화된 이미지 바이트
+            bytes: Optimized image bytes
         """
         try:
-            # PIL Image로 변환
+            # Convert to PIL Image
             image = Image.open(io.BytesIO(image_bytes))
             
-            # RGBA -> RGB 변환 (JPEG 호환성)
+            # RGBA -> RGB conversion (JPEG compatibility)
             if image.mode in ('RGBA', 'LA'):
                 background = Image.new('RGB', image.size, (255, 255, 255))
                 if image.mode == 'RGBA':
@@ -48,24 +48,24 @@ class Screenshot:
                     background.paste(image, mask=image.split()[-1])
                 image = background
             
-            # 이미지 크기가 너무 큰 경우 리사이징
+            # Resize if image is too large
             max_dimension = 1920
             if image.width > max_dimension or image.height > max_dimension:
                 ratio = min(max_dimension / image.width, max_dimension / image.height)
                 new_size = (int(image.width * ratio), int(image.height * ratio))
                 image = image.resize(new_size, Image.Resampling.LANCZOS)
             
-            # 품질 조절하며 압축
+            # Compress with quality adjustment
             for q in range(quality, 10, -10):
                 output = io.BytesIO()
                 image.save(output, format='JPEG', quality=q, optimize=True)
                 compressed_bytes = output.getvalue()
                 
-                # 목표 크기 이하면 반환
+                # Return if under target size
                 if len(compressed_bytes) <= max_size_kb * 1024:
                     return compressed_bytes
             
-            # 최소 품질로도 크기가 큰 경우 추가 리사이징
+            # Additional resizing if still too large even with minimum quality
             for scale in [0.8, 0.6, 0.4]:
                 new_size = (int(image.width * scale), int(image.height * scale))
                 resized = image.resize(new_size, Image.Resampling.LANCZOS)
@@ -76,27 +76,27 @@ class Screenshot:
                 if len(compressed_bytes) <= max_size_kb * 1024:
                     return compressed_bytes
             
-            # 최종적으로 최소 크기로 반환
+            # Finally return with minimum size
             output = io.BytesIO()
             resized.save(output, format='JPEG', quality=10, optimize=True)
             return output.getvalue()
             
         except Exception as e:
-            print(f"이미지 최적화 실패: {e}")
+            print(f"Image optimization failed: {e}")
             return image_bytes
 
     async def capture_screenshot(self, url: str, width: int = 1280, height: int = 720, wait_seconds: int = 2):
         """
-        웹사이트의 스크린샷을 캡처합니다.
+        Capture a screenshot of a website.
         
         Args:
-            url: 캡처할 웹사이트 URL
-            width: 브라우저 창 너비 (기본값: 1280)
-            height: 브라우저 창 높이 (기본값: 720)
-            wait_seconds: 페이지 로드 후 대기 시간 (초, 기본값: 2)
+            url: Website URL to capture
+            width: Browser window width (default: 1280)
+            height: Browser window height (default: 720)
+            wait_seconds: Wait time after page load (seconds, default: 2)
             
         Returns:
-            dict: 스크린샷 결과 (base64 인코딩된 이미지 데이터 포함)
+            dict: Screenshot result (including base64 encoded image data)
         """
         print(f"##### CALL TOOL: capture_screenshot - URL: {url}")
         
@@ -105,24 +105,24 @@ class Screenshot:
                 browser = await p.chromium.launch(headless=True)
                 page = await browser.new_page()
                 
-                # 브라우저 창 크기 설정
+                # Set browser window size
                 await page.set_viewport_size({"width": width, "height": height})
                 
-                # 페이지 로드
+                # Load page
                 await page.goto(url, wait_until='networkidle')
                 
-                # 추가 대기 시간
+                # Additional wait time
                 await asyncio.sleep(wait_seconds)
                 
-                # 스크린샷 캡처 (PNG 형식)
+                # Capture screenshot (PNG format)
                 screenshot_bytes = await page.screenshot(type='png')
                 
                 await browser.close()
                 
-                # 이미지 최적화
+                # Optimize image
                 optimized_bytes = self._optimize_image(screenshot_bytes)
                 
-                # base64 인코딩
+                # Base64 encoding
                 screenshot_base64 = base64.b64encode(optimized_bytes).decode('utf-8')
                 
                 return {
@@ -142,21 +142,21 @@ class Screenshot:
         except Exception as e:
             return {
                 "success": False,
-                "error": f"스크린샷 캡처 실패: {str(e)}",
+                "error": f"Screenshot capture failed: {str(e)}",
                 "url": url
             }
 
     async def capture_fullpage_screenshot(self, url: str, width: int = 1280, wait_seconds: int = 2):
         """
-        웹사이트의 전체 페이지 스크린샷을 캡처합니다.
+        Capture a full page screenshot of a website.
         
         Args:
-            url: 캡처할 웹사이트 URL
-            width: 브라우저 창 너비 (기본값: 1280)
-            wait_seconds: 페이지 로드 후 대기 시간 (초, 기본값: 2)
+            url: Website URL to capture
+            width: Browser window width (default: 1280)
+            wait_seconds: Wait time after page load (seconds, default: 2)
             
         Returns:
-            dict: 전체 페이지 스크린샷 결과 (base64 인코딩된 이미지 데이터 포함)
+            dict: Full page screenshot result (including base64 encoded image data)
         """
         print(f"##### CALL TOOL: capture_fullpage_screenshot - URL: {url}")
         
@@ -165,24 +165,24 @@ class Screenshot:
                 browser = await p.chromium.launch(headless=True)
                 page = await browser.new_page()
                 
-                # 브라우저 창 너비만 설정 (높이는 자동 조절)
+                # Set browser window width only (height auto-adjusts)
                 await page.set_viewport_size({"width": width, "height": 720})
                 
-                # 페이지 로드
+                # Load page
                 await page.goto(url, wait_until='networkidle')
                 
-                # 추가 대기 시간
+                # Additional wait time
                 await asyncio.sleep(wait_seconds)
                 
-                # 전체 페이지 스크린샷 캡처
+                # Capture full page screenshot
                 screenshot_bytes = await page.screenshot(type='png', full_page=True)
                 
                 await browser.close()
                 
-                # 이미지 최적화 (전체 페이지는 더 작은 크기로)
+                # Optimize image (smaller size for full page)
                 optimized_bytes = self._optimize_image(screenshot_bytes, max_size_kb=150)
                 
-                # base64 인코딩
+                # Base64 encoding
                 screenshot_base64 = base64.b64encode(optimized_bytes).decode('utf-8')
                 
                 return {
@@ -200,23 +200,23 @@ class Screenshot:
         except Exception as e:
             return {
                 "success": False,
-                "error": f"전체 페이지 스크린샷 캡처 실패: {str(e)}",
+                "error": f"Full page screenshot capture failed: {str(e)}",
                 "url": url
             }
 
     async def capture_element_screenshot(self, url: str, selector: str, width: int = 1280, height: int = 720, wait_seconds: int = 2):
         """
-        웹사이트의 특정 요소 스크린샷을 캡처합니다.
+        Capture a screenshot of a specific element on a website.
         
         Args:
-            url: 캡처할 웹사이트 URL
-            selector: 캡처할 요소의 CSS 선택자
-            width: 브라우저 창 너비 (기본값: 1280)
-            height: 브라우저 창 높이 (기본값: 720)
-            wait_seconds: 페이지 로드 후 대기 시간 (초, 기본값: 2)
+            url: Website URL to capture
+            selector: CSS selector of the element to capture
+            width: Browser window width (default: 1280)
+            height: Browser window height (default: 720)
+            wait_seconds: Wait time after page load (seconds, default: 2)
             
         Returns:
-            dict: 요소 스크린샷 결과 (base64 인코딩된 이미지 데이터 포함)
+            dict: Element screenshot result (including base64 encoded image data)
         """
         print(f"##### CALL TOOL: capture_element_screenshot - URL: {url}, Selector: {selector}")
         
@@ -225,34 +225,34 @@ class Screenshot:
                 browser = await p.chromium.launch(headless=True)
                 page = await browser.new_page()
                 
-                # 브라우저 창 크기 설정
+                # Set browser window size
                 await page.set_viewport_size({"width": width, "height": height})
                 
-                # 페이지 로드
+                # Load page
                 await page.goto(url, wait_until='networkidle')
                 
-                # 추가 대기 시간
+                # Additional wait time
                 await asyncio.sleep(wait_seconds)
                 
-                # 요소 찾기
+                # Find element
                 element = await page.query_selector(selector)
                 if not element:
                     return {
                         "success": False,
-                        "error": f"선택자 '{selector}'에 해당하는 요소를 찾을 수 없습니다.",
+                        "error": f"Could not find element matching selector '{selector}'.",
                         "url": url,
                         "selector": selector
                     }
                 
-                # 요소 스크린샷 캡처
+                # Capture element screenshot
                 screenshot_bytes = await element.screenshot(type='png')
                 
                 await browser.close()
                 
-                # 이미지 최적화
+                # Optimize image
                 optimized_bytes = self._optimize_image(screenshot_bytes)
                 
-                # base64 인코딩
+                # Base64 encoding
                 screenshot_base64 = base64.b64encode(optimized_bytes).decode('utf-8')
                 
                 return {
@@ -269,7 +269,7 @@ class Screenshot:
         except Exception as e:
             return {
                 "success": False,
-                "error": f"요소 스크린샷 캡처 실패: {str(e)}",
+                "error": f"Element screenshot capture failed: {str(e)}",
                 "url": url,
                 "selector": selector
             }

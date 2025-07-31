@@ -1,6 +1,5 @@
 from fastmcp import FastMCP
 from tools.session_tools import SessionTools
-from tools.script import Script
 from tools.site_info import SiteInfo
 from tools.screenshot import Screenshot
 
