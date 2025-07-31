@@ -30,7 +30,7 @@ class MembershipConfig:
     # 멤버십별 설정 정의
     MEMBERSHIP_CONFIGS = {
         MembershipLevel.FREE: MembershipFeatures(
-            ai_model="gemini-2.5-flash-lite",
+            ai_model="gemini-2.5-flash",
             thinking_budget=-1,  # 사고 토큰
             daily_requests=50,
             max_sites=2,
