@@ -256,7 +256,7 @@ class AIService:
                     )
                 )
 
-                print("#########\n", tool_response)
+                # print("#########\n", tool_response)
                 
                 # 토큰 사용량 및 비용 계산
                 token_info = None
@@ -267,8 +267,6 @@ class AIService:
                         model_name=ai_model,
                         input_type="text_image_video"  # 기본값, 오디오 처리 시 변경 가능
                     )
-                    logger.info(f"토큰 사용량 [{ai_model}] - 총: {token_info['total_tokens']}, 입력: {token_info['input_tokens']}, 출력: {token_info['output_tokens']}, 사고: {token_info['thoughts_tokens']}")
-                    logger.info(f"비용 - USD: ${token_info['total_cost_usd']}, KRW: ₩{token_info['total_cost_krw']}")
                 
                 # 도구 사용 응답에서 데이터 추출
                 if hasattr(tool_response, 'text') and tool_response.text:
@@ -346,15 +344,37 @@ class AIService:
             # JSON 순수 추출
             json_text = extract_json_only(structured_response)
             
+            # JSON 파싱 시도 전에 백슬래시 문제 해결
+            def fix_json_escapes(text):
+                """JSON 문자열에서 잘못된 이스케이프 시퀀스를 수정"""
+                # 1. 줄 끝 백슬래시 제거 (JavaScript 문자열 연결에서 불필요)
+                text = text.replace('\\\n', '\n')
+                text = text.replace('\\\r\n', '\r\n')
+                
+                # 2. 문자열 내부의 백슬래시 처리
+                # JSON 문자열 값 내부에서만 백슬래시를 이스케이프
+                import re
+                
+                def escape_in_string(match):
+                    """문자열 내부의 백슬래시만 이스케이프"""
+                    string_content = match.group(1)
+                    # 이미 이스케이프된 것은 건드리지 않음
+                    string_content = re.sub(r'\\(?![\\"/bfnrt])', r'\\\\', string_content)
+                    return '"' + string_content + '"'
+                
+                # JSON 문자열 값 찾아서 백슬래시 이스케이프
+                text = re.sub(r'"([^"\\]*(?:\\.[^"\\]*)*)"', escape_in_string, text)
+                
+                return text
+            
+            json_text = fix_json_escapes(json_text)
+            
             # JSON 파싱 시도
             parsed_response = None
             try:
                 parsed_response = json.loads(json_text)
             except json.JSONDecodeError as e:
-                # JSON 파싱 실패 시 원본 응답을 message로 사용
-                logger.warning(f"JSON 파싱 실패: {e}")
-                logger.info(f"원본 응답을 message로 사용합니다.")
-                
+                # JSON 파싱 실패 시 원본 응답을 message로 사용                
                 parsed_response = {
                     "message": structured_response.strip(),
                     "script_updates": None
@@ -366,7 +386,7 @@ class AIService:
             response_text = parsed_response.get('message', '')
             if not response_text:
                 # message 필드가 없는 경우 기본 응답 생성
-                logger.warning("AI 응답에 'message' 필드가 없습니다. 기본 응답을 생성합니다.")
+                # logger.warning("AI 응답에 'message' 필드가 없습니다. 기본 응답을 생성합니다.")
                 response_text = "요청을 처리했지만 응답 메시지를 생성할 수 없었습니다. 다시 시도해주세요."
             
             # 스크립트 업데이트 정보 추출
@@ -383,7 +403,7 @@ class AIService:
                     response_metadata = {}
                 response_metadata['token_usage'] = token_info
             
-            logger.info(f"2단계 완료: 메시지 {len(response_text)}자, 메타데이터: {bool(response_metadata)}")
+            # logger.info(f"2단계 완료: 메시지 {len(response_text)}자, 메타데이터: {bool(response_metadata)}")
             return response_text, response_metadata
             
         except Exception as e:
