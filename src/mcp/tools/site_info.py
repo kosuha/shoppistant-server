@@ -57,6 +57,10 @@ class SiteInfo:
         Returns:
             dict: HTML structure information in JSON format
         """
+        # Add protocol if missing
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+            
         print(f"##### CALL TOOL: get_site_html_structure - URL: {url}")
         
         try:
@@ -73,11 +77,12 @@ class SiteInfo:
                 await browser.close()
             
             # Convert to simple structure after cleaning HTML
-            json_html = await self._parse_html_to_json(html_content)
-            print(json_html)  # Debug output
+            json_html = self._parse_html_to_json(html_content)
+            # print(json_html)  # Debug output
             return json_html
 
         except Exception as e:
+            print(f"Error fetching site HTML structure: {str(e)}")
             return {"error": f"Failed to parse site HTML structure: {str(e)}"}
 
     def _is_meaningful_text(self, text: str) -> bool:
@@ -204,6 +209,10 @@ class SiteInfo:
         Returns:
             dict: Console execution results
         """
+        # Add protocol if missing
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+            
         print(f"##### CALL TOOL: execute_console_log - URL: {url}, Command: {console_command}")
         
         try:
