@@ -72,12 +72,12 @@ async def deploy_site_scripts(site_code: str, request: Request, user=Depends(get
         })
 
 
-# 별도 라우터: 스크립트 모듈 제공용 (인증 불필요)
+# 별도 라우터: 스크립트/CSS 모듈 제공용 (인증 불필요)
 module_router = APIRouter(prefix="/api/v1/sites/{site_code}", tags=["script-module"])
 
-@module_router.get("/script", response_class=None)
-async def get_site_script_module(site_code: str):
-    """특정 사이트의 스크립트를 모듈 형태로 제공하는 API (인증 불필요)"""
+@module_router.get("/styles", response_class=None)
+async def get_site_styles_module(site_code: str):
+    """특정 사이트의 CSS를 제공하는 API (인증 불필요)"""
     from main import script_service
     from fastapi.responses import Response
     
@@ -86,10 +86,53 @@ async def get_site_script_module(site_code: str):
         script_data = await script_service.db_helper.get_site_script_by_code_public(site_code)
         
         if not script_data:
-            # 스크립트가 없으면 빈 스크립트 반환
-            script_content = "// No active script found for this site"
+            # CSS가 없으면 빈 CSS 반환
+            css_content = "/* No active styles found for this site */"
         else:
-            script_content = script_data.get('script_content', '// Empty script')
+            css_content = script_data.get('css_content', '/* Empty styles */')
+        
+        # 사이트 도메인 조회하여 CORS Origin 설정
+        site_domain = await script_service.db_helper.get_site_domain_by_code_public(site_code)
+        cors_origin = site_domain if site_domain else "*"  # 도메인이 없으면 모든 도메인 허용
+        
+        # Content-Type을 text/css로 설정
+        return Response(
+            content=css_content,
+            media_type="text/css",
+            headers={
+                "Cache-Control": "public, max-age=300",  # 5분간 캐시
+                "Access-Control-Allow-Origin": cors_origin,  # 사이트별 CORS 허용
+                "Access-Control-Allow-Methods": "GET",
+                "Access-Control-Allow-Headers": "*"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"CSS 모듈 제공 API 실패: {e}")
+        # 에러 상황에서도 유효한 CSS 반환
+        error_css = f"/* CSS loading error: {str(e)} */"
+        return Response(
+            content=error_css,
+            media_type="text/css",
+            status_code=200  # CSS 로딩 에러를 방지하기 위해 200 반환
+        )
+
+@module_router.get("/script", response_class=None)
+async def get_site_script_module(site_code: str):
+    """특정 사이트의 JavaScript를 모듈 형태로 제공하는 API (인증 불필요)"""
+    from main import script_service
+    from fastapi.responses import Response
+    
+    try:
+        # 사이트 코드로 스크립트 조회 (공개 접근)
+        script_data = await script_service.db_helper.get_site_script_by_code_public(site_code)
+        
+        if not script_data:
+            # JS가 없으면 빈 스크립트 반환
+            js_content = "// No active script found for this site"
+        else:
+            # CSS/JS 분리된 경우 js_content 사용, 아니면 기존 script_content 사용
+            js_content = script_data.get('js_content') or script_data.get('script_content', '// Empty script')
         
         # 사이트 도메인 조회하여 CORS Origin 설정
         site_domain = await script_service.db_helper.get_site_domain_by_code_public(site_code)
@@ -97,7 +140,7 @@ async def get_site_script_module(site_code: str):
         
         # Content-Type을 application/javascript로 설정
         return Response(
-            content=script_content,
+            content=js_content,
             media_type="application/javascript",
             headers={
                 "Cache-Control": "public, max-age=300",  # 5분간 캐시

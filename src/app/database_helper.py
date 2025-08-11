@@ -403,8 +403,57 @@ class DatabaseHelper:
     
     # Site Scripts 관련 함수들
     
+    async def update_site_script_separated(self, user_id: str, site_code: str, css_content: str, js_content: str) -> Dict[str, Any]:
+        """사이트 스크립트 업데이트 (CSS/JS 분리 저장)"""
+        try:
+            # 사용자가 해당 사이트에 접근 권한이 있는지 확인
+            site = await self.get_user_site_by_code(user_id, site_code)
+            if not site:
+                raise PermissionError("사이트에 접근할 권한이 없습니다.")
+            
+            # 현재 활성 스크립트 조회
+            current_script = await self.get_site_script(user_id, site_code)
+            
+            # 현재 활성 스크립트와 동일한 내용인지 확인
+            if (current_script and 
+                current_script.get('css_content', '') == css_content and 
+                current_script.get('js_content', '') == js_content):
+                logger.info(f"CSS/JS 내용이 기존과 동일함: site_code={site_code}")
+                return current_script
+            
+            client = self._get_client(use_admin=True)
+            
+            if current_script:
+                # 기존 활성 스크립트가 있으면 CSS/JS 내용 수정
+                script_id = current_script['id']
+                result = client.table('site_scripts').update({
+                    'css_content': css_content,
+                    'js_content': js_content,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', script_id).execute()
+                logger.info(f"기존 CSS/JS 스크립트 수정 완료: site_code={site_code}, script_id={script_id}")
+                return result.data[0] if result.data else {}
+            else:
+                # 활성 스크립트가 없으면 새로 생성
+                script_data = {
+                    'user_id': user_id,
+                    'site_code': site_code,
+                    'css_content': css_content,
+                    'js_content': js_content,
+                    'script_content': '',  # 하위 호환성을 위해 빈 값으로 설정
+                    'version': 1,
+                    'is_active': True
+                }
+                result = client.table('site_scripts').insert(script_data).execute()
+                logger.info(f"새 CSS/JS 스크립트 생성 완료: site_code={site_code}")
+                return result.data[0] if result.data else {}
+            
+        except Exception as e:
+            logger.error(f"CSS/JS 스크립트 업데이트 실패: {e}")
+            return {}
+
     async def update_site_script(self, user_id: str, site_code: str, script_content: str) -> Dict[str, Any]:
-        """사이트 스크립트 업데이트 (기존 스크립트 수정 또는 새로 생성)"""
+        """사이트 스크립트 업데이트 (기존 통합 방식 - 하위 호환성)"""
         try:
             # 사용자가 해당 사이트에 접근 권한이 있는지 확인
             site = await self.get_user_site_by_code(user_id, site_code)
