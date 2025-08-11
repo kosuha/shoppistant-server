@@ -18,9 +18,6 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     SERVER_BASE_URL: str = "http://localhost:8000"
     
-    # MCP 서버 설정
-    MCP_SERVER_URL: str = "http://localhost:8001"
-    
     # Supabase 설정
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str

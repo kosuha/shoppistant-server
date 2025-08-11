@@ -13,21 +13,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - JWT_SECRET=${JWT_SECRET}
       - IMWEB_BASE_URL=${IMWEB_BASE_URL}
-      - MCP_SERVER_URL=${MCP_SERVER_URL}
       - SERVER_BASE_URL=${SERVER_BASE_URL}
-    depends_on:
-      - mcp-server
-    networks:
-      - imweb-network
-    restart: unless-stopped
-
-  mcp-server:
-    image: ghcr.io/${GITHUB_REPOSITORY}/mcp-server:latest
-    container_name: imweb-mcp-server
-    expose:
-      - "8001"
-    environment:
-      - PYTHONUNBUFFERED=1
     networks:
       - imweb-network
     restart: unless-stopped

@@ -11,7 +11,6 @@ from google import genai
 from contextlib import asynccontextmanager
 import logging
 from datetime import datetime
-from fastmcp import Client as MCPClient
 
 # Core imports - 새로운 구조
 from core.config import settings
@@ -42,7 +41,6 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # 환경 변수 로드 (settings에서 관리되지만 기존 코드 호환성을 위해 유지)
-MCP_SERVER_URL = settings.MCP_SERVER_URL
 SUPABASE_URL = settings.SUPABASE_URL
 SUPABASE_ANON_KEY = settings.SUPABASE_ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY = settings.SUPABASE_SERVICE_ROLE_KEY
@@ -58,7 +56,6 @@ else:
     logger.warning("SUPABASE_SERVICE_ROLE_KEY가 설정되지 않음")
 
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-mcp_client = None
 db_connected = False
 
 # 새로운 Factory 패턴으로 서비스 초기화
@@ -93,8 +90,8 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # 시작 시 Playwright MCP 클라이언트 및 데이터베이스 초기화
-    global mcp_client, db_connected
+    # 시작 시 데이터베이스 초기화
+    global db_connected
     
     logger.info("애플리케이션 초기화 시작")
     
@@ -114,17 +111,6 @@ async def lifespan(_app: FastAPI):
     except Exception as e:
         logger.error(f"데이터베이스 초기화 실패: {e}")
         db_connected = False
-    
-    # MCP 클라이언트 초기화 (Factory 패턴 사용)
-    mcp_client = await ServiceFactory.initialize_mcp_client()
-    if mcp_client:
-        logger.info("MCP 클라이언트 연결 성공")
-        # 레거시 인스턴스도 업데이트
-        ai_service.mcp_client = mcp_client
-        logger.info("레거시 AI 서비스 인스턴스에도 MCP 클라이언트 주입 완료")
-        logger.info(f"AI 서비스 MCP 클라이언트 상태: {ai_service.mcp_client is not None}")
-    else:
-        logger.warning("MCP 클라이언트 연결 실패 (일반 모드로 계속)")
     
     # 백그라운드 스케줄러 초기화
     if db_connected:
@@ -168,14 +154,6 @@ async def lifespan(_app: FastAPI):
         logger.info("백그라운드 스케줄러 종료 완료")
     except Exception as e:
         logger.error(f"백그라운드 스케줄러 종료 실패: {e}")
-    
-    # MCP 클라이언트 종료
-    if mcp_client:
-        try:
-            await mcp_client.__aexit__(None, None, None)
-            logger.info("MCP 클라이언트 연결 종료")
-        except Exception as e:
-            logger.error(f"MCP 클라이언트 종료 실패: {e}")
     
     # 시스템 종료 로그 기록
     if db_connected:
@@ -242,7 +220,6 @@ async def health_check():
         return success_response(
             data={
                 "database": db_health,
-                "playwright_mcp_client": "connected" if mcp_client else "disconnected",
                 "timestamp": datetime.now().isoformat(),
                 "version": "1.0.0",
                 "environment": "development" if settings.DEBUG else "production"

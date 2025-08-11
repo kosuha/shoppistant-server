@@ -3,7 +3,6 @@
 """
 from supabase import create_client
 from google import genai
-from fastmcp import Client as MCPClient
 import logging
 
 from core.config import settings
@@ -39,12 +38,8 @@ class ServiceFactory:
         
         # 외부 클라이언트들을 컨테이너에 등록
         from supabase import Client as SyncClient
-        from fastmcp import Client as MCPClient
         container.register_singleton(SyncClient, supabase_client)
         container.register_singleton(genai.Client, gemini_client)
-        
-        # MCP 클라이언트는 일단 None으로 등록 (나중에 초기화)
-        container.register_singleton(MCPClient, None)
         
         # DatabaseHelper 싱글톤 등록
         db_helper = DatabaseHelper(supabase_client, supabase_admin)
@@ -62,10 +57,9 @@ class ServiceFactory:
         container.register_singleton(IImwebService, imweb_service)
         container.register_singleton(WebsiteService, imweb_service)
         
-        # AIService는 MCP 클라이언트 때문에 직접 생성
+        # AIService 직접 생성
         ai_service = AIService(
             gemini_client=gemini_client,
-            mcp_client=None,  # 나중에 주입
             db_helper=db_helper
         )
         container.register_singleton(IAIService, ai_service)
@@ -83,43 +77,10 @@ class ServiceFactory:
         logger.info("의존성 주입 컨테이너 설정 완료")
     
     @staticmethod
-    async def initialize_mcp_client() -> MCPClient:
-        """MCP 클라이언트 초기화"""
-        try:
-            logger.info(f"MCP 클라이언트 초기화 시작: {settings.MCP_SERVER_URL}")
-            mcp_client = MCPClient(settings.MCP_SERVER_URL)
-            await mcp_client.__aenter__()
-            logger.info("MCP 클라이언트 연결 성공")
-            
-            # 컨테이너에 실제 MCP 클라이언트 등록 (기존 None 대체)
-            container.register_singleton(MCPClient, mcp_client)
-            logger.info("컨테이너에 MCP 클라이언트 등록 완료")
-            
-            # 모든 AI 서비스 인스턴스에 MCP 클라이언트 주입
-            try:
-                ai_service = container.get(IAIService)
-                logger.info(f"AI 서비스 조회 성공: {type(ai_service)}")
-                ai_service.mcp_client = mcp_client
-                logger.info("AI 서비스에 MCP 클라이언트 주입 완료")
-            except Exception as inject_error:
-                logger.error(f"AI 서비스에 MCP 클라이언트 주입 실패: {inject_error}")
-            
-            # 하위 호환성을 위해 AIService로도 조회해서 주입
-            try:
-                ai_service_concrete = container.get(AIService)
-                logger.info(f"AIService 구체 클래스 조회 성공: {type(ai_service_concrete)}")
-                ai_service_concrete.mcp_client = mcp_client
-                logger.info("AIService 구체 클래스에도 MCP 클라이언트 주입 완료")
-            except Exception as inject_error:
-                logger.warning(f"AIService 구체 클래스에 MCP 클라이언트 주입 실패: {inject_error}")
-
-            logger.info("MCP 클라이언트 초기화 완료")
-            return mcp_client
-        except Exception as e:
-            logger.error(f"MCP 클라이언트 초기화 실패: {e}")
-            import traceback
-            logger.error(f"스택트레이스: {traceback.format_exc()}")
-            return None
+    async def initialize_mcp_client():
+        """MCP 클라이언트 초기화 (비활성화됨)"""
+        logger.info("MCP 클라이언트 연결이 비활성화되어 있습니다.")
+        return None
     
     @staticmethod
     def get_auth_service() -> IAuthService:
