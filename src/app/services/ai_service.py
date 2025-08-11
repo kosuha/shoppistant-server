@@ -21,26 +21,35 @@ class AIService:
         
         logger.info("AIService 초기화 완료")
 
-    def parse_metadata_scripts(self, metadata: str) -> str:
+    def parse_metadata_context(self, metadata: str) -> Dict[str, Any]:
         """
-        메타데이터에서 현재 스크립트 정보를 파싱합니다.
+        메타데이터에서 컨텍스트 정보를 파싱합니다.
         
         Args:
             metadata: JSON 형태의 메타데이터
             
         Returns:
-            str: 파싱된 스크립트 정보
+            Dict: 파싱된 컨텍스트 정보
         """
         try:
             if not metadata:
-                return ""
+                return {}
 
             parsed_metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
-            current_script = parsed_metadata.get('current_script', {})
             
-            return current_script
+            context = {
+                'pageContext': parsed_metadata.get('pageContext', ''),
+                'userCode': parsed_metadata.get('userCode', {}),
+                'pageUrl': parsed_metadata.get('pageUrl', ''),
+                'domInfo': parsed_metadata.get('domInfo', {}),
+                'current_script': parsed_metadata.get('current_script', {})  # 기존 호환성 유지
+            }
+            
+            return context
         except (json.JSONDecodeError, TypeError):
+            logger.error(f"메타데이터 파싱 실패: {metadata}")
             return {}
+    
 
     async def generate_gemini_response(self, chat_history: List[Dict], user_id: str, metadata: Optional[str] = None, site_code: Optional[str] = None, image_data: Optional[List[str]] = None) -> Tuple[str, Optional[Dict]]:
         """
@@ -75,22 +84,17 @@ class AIService:
             
             conversation_context = "\n".join(contents)
             
-            # 현재 스크립트 정보 문자열 생성
-            current_script = self.parse_metadata_scripts(metadata)
-            current_scripts_info = ""
-            if current_script:
-                current_scripts_info += f"{current_script}\n"
-            else:
-                current_scripts_info = ""
+            # 메타데이터에서 컨텍스트 정보 파싱
+            context_info = self.parse_metadata_context(metadata)
             
-            # AI 요청 처리 (멤버십 레벨 포함)
-            return await self._generate_ai_response(current_scripts_info, conversation_context, session_id, image_data, membership_level)
+            # AI 요청 처리 (컨텍스트 정보 포함)
+            return await self._generate_ai_response(context_info, conversation_context, session_id, image_data, membership_level)
 
         except Exception as e:
             logger.error(f"AI 응답 생성 실패: {e}")
             return f"AI 응답 생성 실패: {str(e)}", None
 
-    async def _generate_ai_response(self, current_scripts_info: str, conversation_context: str, session_id: str, image_data: Optional[List[str]] = None, membership_level: int = 0) -> Tuple[str, Optional[Dict]]:
+    async def _generate_ai_response(self, context_info: Dict[str, Any], conversation_context: str, session_id: str, image_data: Optional[List[str]] = None, membership_level: int = 0) -> Tuple[str, Optional[Dict]]:
         """
         AI 요청 처리 - 직접 Gemini API 호출
         """
@@ -151,8 +155,8 @@ class AIService:
                         logger.error(f"이미지 {i+1} 처리 중 예외 발생: {e}")
                         continue
             
-            # 프롬프트 텍스트 가져오기
-            prompt_text = get_english_prompt(current_scripts_info, conversation_context, image_data, session_id)
+            # 프롬프트 텍스트 가져오기 (컨텍스트 정보를 직접 전달)
+            prompt_text = get_english_prompt(context_info, conversation_context, image_data, session_id)
             
             # contents 구성 (텍스트 + 이미지)
             contents = [prompt_text]
@@ -305,11 +309,99 @@ class AIService:
             
             json_text = fix_json_escapes(json_text)
             
+            # 코드 블록 추출 함수
+            def extract_code_blocks(text):
+                """AI 응답에서 JavaScript와 CSS 코드 블록을 추출합니다."""
+                import re
+                
+                code_blocks = {
+                    "javascript": None,
+                    "css": None
+                }
+                
+                # JavaScript 코드 블록 찾기
+                js_patterns = [
+                    r'```javascript\s*\n(.*?)\n```',
+                    r'```js\s*\n(.*?)\n```',
+                ]
+                
+                for pattern in js_patterns:
+                    matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
+                    if matches:
+                        # 여러 블록이 있으면 합치기
+                        code_blocks["javascript"] = '\n\n'.join(matches)
+                        break
+                
+                # CSS 코드 블록 찾기
+                css_pattern = r'```css\s*\n(.*?)\n```'
+                css_matches = re.findall(css_pattern, text, re.DOTALL | re.IGNORECASE)
+                if css_matches:
+                    # 여러 블록이 있으면 합치기
+                    code_blocks["css"] = '\n\n'.join(css_matches)
+                
+                # 비어있는 값들은 제거
+                return {k: v for k, v in code_blocks.items() if v and v.strip()}
+            
+            # 코드 액션 감지 함수
+            def detect_code_action(text):
+                """AI 응답에서 코드 액션을 감지합니다."""
+                text_lower = text.lower()
+                
+                if any(keyword in text_lower for keyword in ['전체 교체', '완전히 교체', '모든 코드를 교체', '전부 바꾸기']):
+                    return 'replace'
+                elif any(keyword in text_lower for keyword in ['추가', '덧붙이기', '끝에 추가', '아래에 추가']):
+                    return 'append'
+                elif any(keyword in text_lower for keyword in ['삽입', '중간에 추가', '특정 위치에']):
+                    return 'insert'
+                elif any(keyword in text_lower for keyword in ['수정', '변경', '일부 변경', '부분 수정']):
+                    return 'modify'
+                else:
+                    return 'replace'  # 기본값
+
             # JSON 파싱 시도
             parsed_response = None
+            changes_data = None  # changes 형식으로 통일
+            
             try:
                 parsed_response = json.loads(json_text)
                 logger.info("JSON 파싱 성공")
+                
+                # changes 형식만 처리 (완전 통일)
+                if isinstance(parsed_response, dict):
+                    changes = parsed_response.get('changes')
+                    if changes and isinstance(changes, dict):
+                        # 유효한 changes 데이터인지 확인
+                        valid_changes = {}
+                        if changes.get('javascript', {}).get('diff'):
+                            valid_changes['javascript'] = {'diff': changes['javascript']['diff']}
+                        if changes.get('css', {}).get('diff'):
+                            valid_changes['css'] = {'diff': changes['css']['diff']}
+                        
+                        if valid_changes:
+                            changes_data = valid_changes
+                            logger.info(f"Changes 형식 데이터 추출 성공: {list(changes_data.keys())}")
+            
+            # JSON 파싱 실패 시 마크다운 코드 블록에서 changes 형식으로 변환
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON 파싱 실패: {e}")
+                
+                # 마크다운에서 코드 블록 추출 후 changes 형식으로 변환
+                if structured_response:
+                    code_blocks = extract_code_blocks(structured_response)
+                    if code_blocks:
+                        changes_data = {}
+                        if code_blocks.get('javascript'):
+                            changes_data['javascript'] = {'diff': code_blocks['javascript']}
+                        if code_blocks.get('css'):
+                            changes_data['css'] = {'diff': code_blocks['css']}
+                        logger.info(f"마크다운에서 changes 형식으로 변환: {list(changes_data.keys())}")
+                
+                # 파싱 실패 시 기본 응답 구조
+                parsed_response = {
+                    "message": structured_response.strip() if structured_response else "응답을 처리할 수 없었습니다.",
+                    "changes": changes_data
+                }
+                        
             except json.JSONDecodeError as e:
                 logger.warning(f"JSON 파싱 실패: {e}")
                 logger.info(f"원본 응답을 그대로 사용: {structured_response[:200]}...")
@@ -337,19 +429,26 @@ class AIService:
                 else:
                     response_text = "요청을 처리했지만 응답 메시지를 생성할 수 없었습니다. 다시 시도해주세요."
             
-            # 스크립트 업데이트 정보 추출
+            # # 스크립트 업데이트 정보 추출
             response_metadata = None
-            script_updates = parsed_response.get('script_updates')
-            if script_updates:
-                response_metadata = {
-                    'script_updates': script_updates
-                }
+            # script_updates = parsed_response.get('script_updates')
+            # if script_updates:
+            #     response_metadata = {
+            #         'script_updates': script_updates
+            #     }
             
             # 응답에 토큰 정보 추가
             if token_info:
                 if not response_metadata:
                     response_metadata = {}
                 response_metadata['token_usage'] = token_info
+            
+            # 추출된 changes 데이터가 있으면 응답 메타데이터에 추가
+            if changes_data:
+                if not response_metadata:
+                    response_metadata = {}
+                response_metadata['changes'] = changes_data
+                logger.info(f"Changes 데이터를 메타데이터에 추가: {changes_data.keys()}")
             
             logger.info(f"최종 응답: 메시지 {len(response_text)}자, 메타데이터: {bool(response_metadata)}")
             logger.info(f"최종 응답 내용 미리보기: '{response_text[:100]}...'")
