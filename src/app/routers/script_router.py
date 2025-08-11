@@ -131,8 +131,8 @@ async def get_site_script_module(site_code: str):
             # JS가 없으면 빈 스크립트 반환
             js_content = "// No active script found for this site"
         else:
-            # CSS/JS 분리된 경우 js_content 사용, 아니면 기존 script_content 사용
-            js_content = script_data.get('js_content') or script_data.get('script_content', '// Empty script')
+            # JavaScript는 script_content 컬럼 사용
+            js_content = script_data.get('script_content', '// Empty script')
         
         # 사이트 도메인 조회하여 CORS Origin 설정
         site_domain = await script_service.db_helper.get_site_domain_by_code_public(site_code)

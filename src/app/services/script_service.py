@@ -80,7 +80,7 @@ class ScriptService(BaseService, IScriptService):
             # CSS/JS 분리 응답 (하위 호환성을 위해 script도 포함)
             return {
                 "css_content": script_data.get('css_content', ''),
-                "js_content": script_data.get('js_content', ''),
+                "js_content": script_data.get('script_content', ''),  # JS는 script_content 컬럼 사용
                 "script": script_data.get('script_content', ''),  # 하위 호환성
                 "version": script_data.get('version', 1),
                 "last_updated": script_data.get('updated_at', script_data.get('created_at'))
@@ -89,7 +89,7 @@ class ScriptService(BaseService, IScriptService):
             self.logger.debug(f"사이트 {site_code}의 활성 스크립트가 없음")
             return {
                 "css_content": '',
-                "js_content": '',
+                "js_content": '',  # JS는 script_content 컬럼 사용
                 "script": '',  # 하위 호환성
                 "version": 0,
                 "last_updated": None

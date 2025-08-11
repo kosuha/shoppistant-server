@@ -417,7 +417,7 @@ class DatabaseHelper:
             # 현재 활성 스크립트와 동일한 내용인지 확인
             if (current_script and 
                 current_script.get('css_content', '') == css_content and 
-                current_script.get('js_content', '') == js_content):
+                current_script.get('script_content', '') == js_content):
                 logger.info(f"CSS/JS 내용이 기존과 동일함: site_code={site_code}")
                 return current_script
             
@@ -428,7 +428,7 @@ class DatabaseHelper:
                 script_id = current_script['id']
                 result = client.table('site_scripts').update({
                     'css_content': css_content,
-                    'js_content': js_content,
+                    'script_content': js_content,  # JS는 기존 script_content 컬럼 사용
                     'updated_at': datetime.now().isoformat()
                 }).eq('id', script_id).execute()
                 logger.info(f"기존 CSS/JS 스크립트 수정 완료: site_code={site_code}, script_id={script_id}")
@@ -439,8 +439,7 @@ class DatabaseHelper:
                     'user_id': user_id,
                     'site_code': site_code,
                     'css_content': css_content,
-                    'js_content': js_content,
-                    'script_content': '',  # 하위 호환성을 위해 빈 값으로 설정
+                    'script_content': js_content,  # JS는 기존 script_content 컬럼 사용
                     'version': 1,
                     'is_active': True
                 }
