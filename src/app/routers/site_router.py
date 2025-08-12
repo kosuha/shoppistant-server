@@ -20,7 +20,6 @@ async def get_user_sites(user=Depends(get_current_user)):
     from main import db_helper
     
     try:
-        print(f"[ROUTER] 사용자 사이트 조회 요청: user={user}")
         user_sites = await db_helper.get_user_sites(user.id, user.id)
         
         # 사이트 정보 정리 (domain 필드 추가, 토큰 정보 제거)
