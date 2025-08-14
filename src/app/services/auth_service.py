@@ -39,7 +39,6 @@ class AuthService(BaseService, IAuthService):
             if response.user is None:
                 raise AuthenticationException("유효하지 않은 토큰입니다")
             
-            self.logger.info(f"사용자 인증 성공: {response.user.id} - {response.user.email}")
             
             # 프로필 자동 생성/확인
             try:
@@ -49,7 +48,6 @@ class AuthService(BaseService, IAuthService):
                         response.user.id, 
                         response.user.email
                     )
-                    self.logger.info(f"새 사용자 프로필 생성: {response.user.id}")
             except Exception as profile_error:
                 self.logger.warning(f"프로필 처리 실패: {profile_error}")
             

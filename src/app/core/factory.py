@@ -74,12 +74,10 @@ class ServiceFactory:
         container.register_service(ThreadService, ThreadService)
         container.register_service(MembershipService, MembershipService)
         
-        logger.info("의존성 주입 컨테이너 설정 완료")
     
     @staticmethod
     async def initialize_mcp_client():
         """MCP 클라이언트 초기화 (비활성화됨)"""
-        logger.info("MCP 클라이언트 연결이 비활성화되어 있습니다.")
         return None
     
     @staticmethod

@@ -137,7 +137,6 @@ async def stream_message_status(
                     # shutdown 신호 확인
                     from main import shutdown_event
                     if shutdown_event.is_set():
-                        logger.info(f"Shutdown signal received, closing SSE connection {connection_id}")
                         break
                     
                     # 큐에서 상태 변화 대기
@@ -149,7 +148,6 @@ async def stream_message_status(
                         yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
                         
             except asyncio.CancelledError:
-                logger.info(f"SSE connection {connection_id} cancelled")
                 raise
             except Exception as e:
                 logger.error(f"SSE 스트림 오류: {e}")
@@ -169,7 +167,6 @@ async def stream_message_status(
         finally:
             # 연결 정리
             active_sse_connections.discard(connection_id)
-            logger.info(f"SSE connection {connection_id} cleaned up")
     
     return StreamingResponse(
         event_stream(),
@@ -271,7 +268,6 @@ async def get_message_status(
 
 async def cleanup_all_sse_connections():
     """모든 SSE 연결을 정리하는 함수"""
-    logger.info(f"Cleaning up {len(active_sse_connections)} active SSE connections...")
     
     # 모든 활성 연결을 비활성화
     connections_to_clean = active_sse_connections.copy()
@@ -280,4 +276,3 @@ async def cleanup_all_sse_connections():
     # 구독자 목록도 정리
     message_status_subscribers.clear()
     
-    logger.info(f"SSE cleanup completed. Cleaned {len(connections_to_clean)} connections.")

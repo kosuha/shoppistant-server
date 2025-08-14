@@ -52,7 +52,6 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 supabase_admin = None
 if SUPABASE_SERVICE_ROLE_KEY:
     supabase_admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-    logger.info("Supabase 관리자 클라이언트 생성됨")
 else:
     logger.warning("SUPABASE_SERVICE_ROLE_KEY가 설정되지 않음")
 
@@ -79,7 +78,6 @@ shutdown_event = asyncio.Event()
 
 def signal_handler(signum, frame):
     """SIGINT (Ctrl+C) 및 SIGTERM 처리"""
-    logger.info(f"Signal {signum} received, initiating graceful shutdown...")
     shutdown_event.set()
     # 강제 종료를 위한 시스템 종료
     import sys
@@ -94,14 +92,12 @@ async def lifespan(_app: FastAPI):
     # 시작 시 데이터베이스 초기화
     global db_connected
     
-    logger.info("애플리케이션 초기화 시작")
     
     # 데이터베이스 연결 상태 확인
     try:
         health_status = await db_helper.health_check()
         db_connected = health_status.get('connected', False)
         if db_connected:
-            logger.info("데이터베이스 연결 성공")
             # 시스템 시작 로그 기록
             await db_helper.log_system_event(
                 event_type='server_start',
@@ -117,16 +113,13 @@ async def lifespan(_app: FastAPI):
     if db_connected:
         try:
             await initialize_scheduler(db_helper)
-            logger.info("백그라운드 스케줄러 초기화 완료")
         except Exception as e:
             logger.error(f"백그라운드 스케줄러 초기화 실패: {e}")
     
-    logger.info("모든 서비스 인스턴스 초기화 완료")
     
     yield
     
     # 종료 시 정리
-    logger.info("애플리케이션 종료 시작...")
     
     # SSE 연결 정리
     try:
@@ -139,20 +132,17 @@ async def lifespan(_app: FastAPI):
     try:
         tasks = [task for task in asyncio.all_tasks() if not task.done()]
         if tasks:
-            logger.info(f"Cancelling {len(tasks)} remaining tasks...")
             for task in tasks:
                 task.cancel()
             
             # task들이 정리될 때까지 잠시 대기
             await asyncio.gather(*tasks, return_exceptions=True)
-            logger.info("All tasks cancelled successfully")
     except Exception as e:
         logger.error(f"Task cleanup 실패: {e}")
     
     # 백그라운드 스케줄러 종료
     try:
         await cleanup_scheduler()
-        logger.info("백그라운드 스케줄러 종료 완료")
     except Exception as e:
         logger.error(f"백그라운드 스케줄러 종료 실패: {e}")
     
@@ -166,7 +156,6 @@ async def lifespan(_app: FastAPI):
         except Exception as e:
             logger.error(f"종료 로그 기록 실패: {e}")
     
-    logger.info("애플리케이션 종료 완료")
 
 app = FastAPI(
     title="Imweb AI Agent Server", 

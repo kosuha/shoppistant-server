@@ -750,7 +750,6 @@ class DatabaseHelper:
             result = client.table('user_memberships').update(update_data).eq('user_id', user_id).execute()
             
             if result.data:
-                logger.info(f"사용자 멤버십 업데이트 완료: user_id={user_id}, level={membership_level}")
                 return True
             else:
                 logger.warning(f"사용자 멤버십 업데이트 실패: user_id={user_id}")
@@ -766,7 +765,6 @@ class DatabaseHelper:
             if not membership:
                 # 기본 멤버십 생성
                 membership = await self.create_user_membership(user_id, 0, None)
-                logger.info(f"기본 멤버십 생성: user_id={user_id}")
             return membership
         except Exception as e:
             logger.error(f"사용자 멤버십 확인/생성 실패: {e}")
@@ -810,7 +808,6 @@ class DatabaseHelper:
             result = client.table('user_memberships').update(update_data).eq('user_id', user_id).execute()
             
             if result.data:
-                logger.info(f"만료된 멤버십 다운그레이드 완료: user_id={user_id}")
                 # 시스템 로그 기록
                 await self.log_system_event(
                     user_id=user_id,
@@ -835,7 +832,6 @@ class DatabaseHelper:
                     downgraded_count += 1
             
             if downgraded_count > 0:
-                logger.info(f"배치 다운그레이드 완료: {downgraded_count}건 처리")
                 await self.log_system_event(
                     event_type='batch_membership_downgrade',
                     event_data={'downgraded_count': downgraded_count}
@@ -949,7 +945,6 @@ class DatabaseHelper:
             ).execute()
             
             deleted_count = len(result.data) if result.data else 0
-            logger.info(f"오래된 요청 로그 {deleted_count}개 정리 완료")
             return deleted_count
         except Exception as e:
             logger.error(f"요청 로그 정리 실패: {e}")

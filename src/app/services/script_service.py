@@ -58,7 +58,6 @@ class ScriptService(BaseService, IScriptService):
     
     async def _get_site_scripts_internal(self, user_id: str, site_code: str) -> Dict[str, Any]:
         """내부 스크립트 조회 로직"""
-        self.logger.info(f"스크립트 조회 요청: user_id={user_id}, site_code={site_code}")
         
         # 필수 필드 검증
         self.validate_required_fields(
@@ -105,7 +104,6 @@ class ScriptService(BaseService, IScriptService):
     
     async def _deploy_site_scripts_internal(self, user_id: str, site_code: str, scripts_data: Dict[str, str]) -> Dict[str, Any]:
         """내부 스크립트 배포 로직"""
-        self.logger.info(f"스크립트 배포 요청: user_id={user_id}, site_code={site_code}")
         
         # 필수 필드 검증
         self.validate_required_fields(

@@ -94,4 +94,3 @@ def log_operation(operation: str, user_id: str = None, data: Dict = None):
         "user_id": user_id,
         **(data or {})
     }
-    logger.info(f"Operation: {operation}", extra=log_data)

@@ -21,7 +21,6 @@ class BackgroundScheduler:
             return
         
         self.running = True
-        logger.info("백그라운드 스케줄러 시작")
         
         # 일일 정리 작업 (매일 자정)
         self.tasks.append(
@@ -39,7 +38,6 @@ class BackgroundScheduler:
             return
         
         self.running = False
-        logger.info("백그라운드 스케줄러 중지")
         
         # 모든 실행 중인 작업 취소
         for task in self.tasks:
@@ -63,7 +61,6 @@ class BackgroundScheduler:
                 )
                 sleep_seconds = (next_midnight - now).total_seconds()
                 
-                logger.info(f"다음 정리 작업까지 {sleep_seconds:.0f}초 대기")
                 await asyncio.sleep(sleep_seconds)
                 
                 if not self.running:
@@ -73,7 +70,6 @@ class BackgroundScheduler:
                 await self._run_daily_cleanup()
                 
             except asyncio.CancelledError:
-                logger.info("일일 정리 스케줄러 취소됨")
                 break
             except Exception as e:
                 logger.error(f"일일 정리 스케줄러 오류: {e}")
@@ -92,10 +88,9 @@ class BackgroundScheduler:
                 # 만료된 멤버십 다운그레이드
                 downgraded_count = await self.db_helper.batch_downgrade_expired_memberships()
                 if downgraded_count > 0:
-                    logger.info(f"만료된 멤버십 {downgraded_count}개 다운그레이드 완료")
+                    pass
                 
             except asyncio.CancelledError:
-                logger.info("멤버십 체크 스케줄러 취소됨")
                 break
             except Exception as e:
                 logger.error(f"멤버십 체크 스케줄러 오류: {e}")
@@ -103,15 +98,12 @@ class BackgroundScheduler:
     async def _run_daily_cleanup(self):
         """일일 정리 작업 실행"""
         try:
-            logger.info("일일 정리 작업 시작")
             
             # 1. 오래된 요청 로그 정리 (30일 이상)
             deleted_logs = await self.db_helper.cleanup_old_request_logs(days_to_keep=30)
-            logger.info(f"오래된 요청 로그 {deleted_logs}개 정리 완료")
             
             # 2. 만료된 멤버십 다운그레이드
             downgraded_count = await self.db_helper.batch_downgrade_expired_memberships()
-            logger.info(f"만료된 멤버십 {downgraded_count}개 다운그레이드 완료")
             
             # 3. 시스템 이벤트 로그 기록
             await self.db_helper.log_system_event(
@@ -123,7 +115,6 @@ class BackgroundScheduler:
                 }
             )
             
-            logger.info("일일 정리 작업 완료")
             
         except Exception as e:
             logger.error(f"일일 정리 작업 실패: {e}")
@@ -131,7 +122,6 @@ class BackgroundScheduler:
     async def trigger_cleanup_now(self) -> dict:
         """즉시 정리 작업 실행 (관리자용)"""
         try:
-            logger.info("수동 정리 작업 실행")
             await self._run_daily_cleanup()
             return {"success": True, "message": "정리 작업 완료"}
         except Exception as e:
@@ -151,7 +141,6 @@ async def initialize_scheduler(db_helper):
     if scheduler is None:
         scheduler = BackgroundScheduler(db_helper)
         await scheduler.start()
-        logger.info("백그라운드 스케줄러 초기화 완료")
 
 async def cleanup_scheduler():
     """스케줄러 정리"""
@@ -159,4 +148,3 @@ async def cleanup_scheduler():
     if scheduler:
         await scheduler.stop()
         scheduler = None
-        logger.info("백그라운드 스케줄러 정리 완료")

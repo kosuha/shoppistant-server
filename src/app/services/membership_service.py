@@ -33,9 +33,7 @@ class MembershipService(BaseService, IMembershipService):
             if not membership:
                 # 멤버십이 없으면 기본 멤버십 생성 시도
                 membership = await self.db_helper.create_user_membership(user_id, MembershipLevel.BASIC)
-                if membership:
-                    self.logger.info(f"기본 멤버십 자동 생성: user_id={user_id}")
-                else:
+                if not membership:
                     # 멤버십 생성 실패 시 기본값 반환
                     self.logger.warning(f"멤버십 생성 실패, 기본값 반환: user_id={user_id}")
                     return {
@@ -108,8 +106,6 @@ class MembershipService(BaseService, IMembershipService):
                     }
                 )
                 
-                self.logger.info(f"멤버십 업그레이드 성공: user_id={user_id}, level={target_level}")
-                
                 # 업데이트된 멤버십 정보 반환
                 return await self.get_user_membership(user_id)
             else:
@@ -158,8 +154,6 @@ class MembershipService(BaseService, IMembershipService):
                         'new_expires_at': new_expires_at.isoformat()
                     }
                 )
-                
-                self.logger.info(f"멤버십 연장 성공: user_id={user_id}, days={days}")
                 return await self.get_user_membership(user_id)
             else:
                 raise Exception("멤버십 연장 실패")
@@ -210,8 +204,6 @@ class MembershipService(BaseService, IMembershipService):
                 'downgraded_count': downgraded_count,
                 'processed_at': datetime.now().isoformat()
             }
-            
-            self.logger.info(f"만료된 멤버십 배치 정리 완료: {downgraded_count}건")
             return result
             
         except Exception as e:

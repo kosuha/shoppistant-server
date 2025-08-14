@@ -18,9 +18,7 @@ class BaseService:
     async def handle_operation(self, operation_name: str, operation_func, *args, **kwargs) -> Dict[str, Any]:
         """공통 작업 처리 래퍼"""
         try:
-            self.logger.info(f"{operation_name} 시작")
             result = await operation_func(*args, **kwargs)
-            self.logger.info(f"{operation_name} 성공")
             return {"success": True, "data": result}
         except BusinessException as e:
             self.logger.warning(f"{operation_name} 비즈니스 오류: {e.message}")

@@ -19,7 +19,6 @@ class AIService:
         self.gemini_client = gemini_client
         self.db_helper = db_helper
         
-        logger.info("AIService 초기화 완료")
 
     def parse_metadata_context(self, metadata: str) -> Dict[str, Any]:
         """
@@ -103,21 +102,18 @@ class AIService:
             ai_model = MembershipConfig.get_ai_model(membership_level)
             thinking_budget = MembershipConfig.get_thinking_budget(membership_level)
             
-            logger.info(f"멤버십 레벨 {membership_level}: AI 모델={ai_model}, 사고 예산={thinking_budget}")
             
             # 이미지 데이터 처리
             image_parts = []
             if image_data:
                 for i, img_data in enumerate(image_data):
                     try:
-                        logger.info(f"이미지 {i+1} 데이터 길이: {len(img_data) if img_data else 0}")
                         
                         # 데이터 형식 검증
                         if not img_data or not isinstance(img_data, str):
                             continue
                         
                         # 실제 데이터 내용 확인 (디버깅용)
-                        logger.info(f"이미지 {i+1} 실제 데이터: '{img_data[:100]}...'")
                         
                         # data:image/jpeg;base64, 형식 확인
                         if not img_data.startswith('data:image/'):
@@ -343,7 +339,6 @@ class AIService:
             
             try:
                 parsed_response = json.loads(json_text)
-                logger.info("JSON 파싱 성공")
                 
                 # changes 형식만 처리 (완전 통일)
                 if isinstance(parsed_response, dict):
@@ -358,7 +353,6 @@ class AIService:
                         
                         if valid_changes:
                             changes_data = valid_changes
-                            logger.info(f"Changes 형식 데이터 추출 성공: {list(changes_data.keys())}")
             
             # JSON 파싱 실패 시 마크다운 코드 블록에서 changes 형식으로 변환
             except json.JSONDecodeError as e:
@@ -373,7 +367,6 @@ class AIService:
                             changes_data['javascript'] = {'diff': code_blocks['javascript']}
                         if code_blocks.get('css'):
                             changes_data['css'] = {'diff': code_blocks['css']}
-                        logger.info(f"마크다운에서 changes 형식으로 변환: {list(changes_data.keys())}")
                 
                 # 파싱 실패 시 기본 응답 구조
                 parsed_response = {
@@ -383,7 +376,6 @@ class AIService:
                         
             except json.JSONDecodeError as e:
                 logger.warning(f"JSON 파싱 실패: {e}")
-                logger.info(f"원본 응답을 그대로 사용: {structured_response[:200]}...")
                 # JSON 파싱 실패 시 원본 응답을 message로 사용                
                 parsed_response = {
                     "message": structured_response.strip(),
@@ -404,7 +396,6 @@ class AIService:
                 # 전체 응답이 있다면 그것을 사용, 없다면 기본 메시지
                 if structured_response and structured_response.strip():
                     response_text = structured_response.strip()
-                    logger.info("원본 응답을 message로 사용합니다.")
                 else:
                     response_text = "요청을 처리했지만 응답 메시지를 생성할 수 없었습니다. 다시 시도해주세요."
             
@@ -427,10 +418,7 @@ class AIService:
                 if not response_metadata:
                     response_metadata = {}
                 response_metadata['changes'] = changes_data
-                logger.info(f"Changes 데이터를 메타데이터에 추가: {changes_data.keys()}")
             
-            logger.info(f"최종 응답: 메시지 {len(response_text)}자, 메타데이터: {bool(response_metadata)}")
-            logger.info(f"최종 응답 내용 미리보기: '{response_text[:100]}...'")
             return response_text, response_metadata
             
         except Exception as e:

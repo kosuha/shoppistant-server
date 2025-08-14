@@ -370,9 +370,7 @@ class ThreadService:
                     
                     if not skip_ai_generation:
                         # AI 응답 생성 (메타데이터 및 사이트 코드, 이미지 데이터 포함)
-                        logger.info("AI 서비스 호출 시작")
                         ai_response_result = await self.ai_service.generate_gemini_response(chat_history, user_id, metadata, site_code, image_data)
-                        logger.info(f"AI 서비스 응답 받음: {type(ai_response_result)}")
                         
                         # 일일 요청 수 증가 (정상 AI 응답인 경우에만)
                         await self.db_helper.increment_daily_request(user_id, 'message_send')
@@ -386,7 +384,6 @@ class ThreadService:
                         # 튜플 언패킹
                         if isinstance(ai_response_result, tuple) and len(ai_response_result) == 2:
                             ai_response, ai_metadata = ai_response_result
-                            logger.info(f"AI 응답 언패킹 성공: response='{ai_response[:50] if ai_response else 'None'}...', metadata={bool(ai_metadata)}")
                         else:
                             raise ValueError(f"AI 서비스에서 예상치 못한 형태의 응답을 받았습니다: {type(ai_response_result)}")
                     # skip_ai_generation이 True인 경우 ai_response와 ai_metadata는 이미 설정됨
@@ -424,12 +421,8 @@ class ThreadService:
                         if ai_metadata:
                             changes_data = ai_metadata.get('changes')
                             if changes_data:
-                                logger.info(f"Changes 데이터: {list(changes_data.keys())}")
                         
                         # AI 응답 업데이트 전 로깅
-                        logger.info(f"AI 응답 업데이트 시작: message_id={ai_message['id']}")
-                        logger.info(f"AI 응답 내용: '{ai_response[:100] if ai_response else 'None'}...'")
-                        logger.info(f"AI 응답 길이: {len(ai_response) if ai_response else 0}")
                         
                         success = await self.db_helper.update_message_status(
                             requesting_user_id=user_id,
@@ -441,7 +434,6 @@ class ThreadService:
                             ai_model=ai_model
                         )
                         
-                        logger.info(f"AI 응답 업데이트 결과: {success}")
                         if not success:
                             logger.warning("AI 응답 업데이트에 실패했습니다.")
                         else:
@@ -455,9 +447,7 @@ class ThreadService:
                             # Changes 데이터를 클라이언트 응답에 추가
                             if changes_data:
                                 ai_message['changes'] = changes_data
-                                logger.info(f"클라이언트 응답에 changes 정보 추가: {list(changes_data.keys())}")
                             
-                            logger.info(f"응답용 ai_message 업데이트 완료: message='{ai_response[:50]}...', status='completed', has_changes={bool(changes_data)}")
                             
                             # SSE 브로드캐스트 - 완료 상태 (메타데이터 포함)
                             await self._broadcast_status_update(thread_id, ai_message['id'], 'completed', ai_response, ai_metadata)

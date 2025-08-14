@@ -117,7 +117,6 @@ class ImageValidator:
                 detail=f"전체 이미지 크기가 너무 큽니다. (최대: 10MB, 현재: {total_size // (1024*1024)}MB)"
             )
         
-        logger.info(f"이미지 검증 완료: {len(images)}개, 총 {total_size // 1024}KB")
         return True
     
     @classmethod

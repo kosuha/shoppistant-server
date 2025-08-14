@@ -49,18 +49,14 @@ class RateLimitMiddleware:
     async def __call__(self, request: Request, call_next: Callable) -> Response:
         """미들웨어 실행"""
         try:
-            logger.info(f"RateLimitMiddleware 실행: {request.url.path}")
             
             # 요청 제한 대상인지 확인
             if not self.should_apply_rate_limit(request.url.path, request.method):
-                logger.info(f"요청 제한 대상이 아님: {request.method} {request.url.path}")
                 return await call_next(request)
             
-            logger.info(f"요청 제한 대상: {request.url.path}")
             
             # 인증된 사용자 확인
             user_id = await self._get_user_id_from_request(request)
-            logger.info(f"추출된 사용자 ID: {user_id}")
             
             if not user_id:
                 logger.warning("사용자 ID를 추출할 수 없음 - 인증 미들웨어에서 처리")
@@ -114,9 +110,7 @@ class RateLimitMiddleware:
                 )
             
             # 요청 수 증가
-            logger.info(f"일일 요청 수 증가: user_id={user_id}, path={request.url.path}")
             increment_result = await db_helper.increment_daily_request(user_id, request.url.path)
-            logger.info(f"요청 수 증가 결과: {increment_result}")
             
             # 요청 처리
             response = await call_next(request)
