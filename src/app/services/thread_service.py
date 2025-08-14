@@ -420,7 +420,6 @@ class ThreadService:
                         changes_data = None
                         if ai_metadata:
                             changes_data = ai_metadata.get('changes')
-                            if changes_data:
                         
                         # AI 응답 업데이트 전 로깅
                         
