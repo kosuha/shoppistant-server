@@ -82,7 +82,6 @@ class Screenshot:
             return output.getvalue()
             
         except Exception as e:
-            print(f"Image optimization failed: {e}")
             return image_bytes
 
     async def capture_screenshot(self, url: str, width: int = 1280, height: int = 720, wait_seconds: int = 2):
@@ -98,7 +97,6 @@ class Screenshot:
         Returns:
             dict: Screenshot result (including base64 encoded image data)
         """
-        print(f"##### CALL TOOL: capture_screenshot - URL: {url}")
         
         try:
             async with async_playwright() as p:
@@ -158,7 +156,6 @@ class Screenshot:
         Returns:
             dict: Full page screenshot result (including base64 encoded image data)
         """
-        print(f"##### CALL TOOL: capture_fullpage_screenshot - URL: {url}")
         
         try:
             async with async_playwright() as p:
@@ -218,7 +215,6 @@ class Screenshot:
         Returns:
             dict: Element screenshot result (including base64 encoded image data)
         """
-        print(f"##### CALL TOOL: capture_element_screenshot - URL: {url}, Selector: {selector}")
         
         try:
             async with async_playwright() as p:

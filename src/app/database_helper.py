@@ -53,7 +53,6 @@ class DatabaseHelper:
         """사용자의 연결된 사이트 목록 조회"""
         try:
             # 권한 검증
-            print(f"Fetching user sites for user_id: {user_id}")
             self._verify_user_access(requesting_user_id, user_id)
             
             client = self._get_client(use_admin=True)
@@ -297,7 +296,6 @@ class DatabaseHelper:
             }).eq('user_id', user_id).eq('site_code', site_code).execute()
             
             if result.data:
-                logger.info(f"사이트 {site_code}의 이름이 '{site_name}'으로 업데이트됨")
                 return True
             else:
                 logger.warning(f"사이트 {site_code} 업데이트 실패")
@@ -313,7 +311,6 @@ class DatabaseHelper:
             result = client.table('user_sites').delete().eq('user_id', user_id).eq('id', site_id).execute()
             
             if result.data:
-                logger.info(f"사이트 {site_id} 삭제 완료")
                 return True
             else:
                 logger.warning(f"사이트 {site_id} 삭제 실패")
@@ -331,7 +328,6 @@ class DatabaseHelper:
             }).eq('user_id', user_id).eq('site_code', site_code).execute()
             
             if result.data:
-                logger.info(f"사이트 {site_code}의 유닛 코드가 '{unit_code}'로 업데이트됨")
                 return True
             else:
                 logger.warning(f"사이트 {site_code} 유닛 코드 업데이트 실패")
@@ -349,7 +345,6 @@ class DatabaseHelper:
             }).eq('user_id', user_id).eq('site_code', site_code).execute()
             
             if result.data:
-                logger.info(f"사이트 {site_code}의 도메인이 '{primary_domain}'로 업데이트됨")
                 return True
             else:
                 logger.warning(f"사이트 {site_code} 도메인 업데이트 실패")
@@ -368,7 +363,6 @@ class DatabaseHelper:
             }).eq('id', thread_id).execute()
             
             if result.data:
-                logger.info(f"스레드 {thread_id}의 제목이 '{title}'으로 업데이트됨")
                 return True
             else:
                 logger.warning(f"스레드 {thread_id} 제목 업데이트 실패")
@@ -418,7 +412,6 @@ class DatabaseHelper:
             if (current_script and 
                 current_script.get('css_content', '') == css_content and 
                 current_script.get('script_content', '') == js_content):
-                logger.info(f"CSS/JS 내용이 기존과 동일함: site_code={site_code}")
                 return current_script
             
             client = self._get_client(use_admin=True)
@@ -431,7 +424,6 @@ class DatabaseHelper:
                     'script_content': js_content,  # JS는 기존 script_content 컬럼 사용
                     'updated_at': datetime.now().isoformat()
                 }).eq('id', script_id).execute()
-                logger.info(f"기존 CSS/JS 스크립트 수정 완료: site_code={site_code}, script_id={script_id}")
                 return result.data[0] if result.data else {}
             else:
                 # 활성 스크립트가 없으면 새로 생성
@@ -444,7 +436,6 @@ class DatabaseHelper:
                     'is_active': True
                 }
                 result = client.table('site_scripts').insert(script_data).execute()
-                logger.info(f"새 CSS/JS 스크립트 생성 완료: site_code={site_code}")
                 return result.data[0] if result.data else {}
             
         except Exception as e:
@@ -464,7 +455,6 @@ class DatabaseHelper:
             
             # 현재 활성 스크립트와 동일한 내용인지 확인
             if current_script and current_script.get('script_content') == script_content:
-                logger.info(f"스크립트 내용이 기존과 동일함: site_code={site_code}")
                 return current_script
             
             client = self._get_client(use_admin=True)
@@ -476,7 +466,6 @@ class DatabaseHelper:
                     'script_content': script_content,
                     'updated_at': datetime.now().isoformat()
                 }).eq('id', script_id).execute()
-                logger.info(f"기존 스크립트 수정 완료: site_code={site_code}, script_id={script_id}")
                 return result.data[0] if result.data else {}
             else:
                 # 활성 스크립트가 없으면 새로 생성
@@ -488,7 +477,6 @@ class DatabaseHelper:
                     'is_active': True
                 }
                 result = client.table('site_scripts').insert(script_data).execute()
-                logger.info(f"새 스크립트 생성 완료: site_code={site_code}")
                 return result.data[0] if result.data else {}
             
         except Exception as e:
@@ -508,10 +496,8 @@ class DatabaseHelper:
             result = client.table('site_scripts').select('*').eq('user_id', user_id).eq('site_code', site_code).eq('is_active', True).execute()
             
             if result.data:
-                logger.info(f"활성 스크립트 조회 성공: site_code={site_code}")
                 return result.data[0]
             else:
-                logger.info(f"활성 스크립트 없음: site_code={site_code}")
                 return None
         except Exception as e:
             logger.error(f"사이트 스크립트 조회 실패: {e}")
@@ -556,7 +542,6 @@ class DatabaseHelper:
             
             # 모든 스크립트 비활성화
             await self._deactivate_existing_scripts(user_id, site_code)
-            logger.info(f"사이트 스크립트 삭제 완료: site_code={site_code}")
             return True
         except Exception as e:
             logger.error(f"사이트 스크립트 삭제 실패: {e}")
@@ -571,7 +556,6 @@ class DatabaseHelper:
                 'updated_at': datetime.now().isoformat()
             }).eq('user_id', user_id).eq('site_code', site_code).eq('is_active', True).execute()
             
-            logger.info(f"기존 활성 스크립트 비활성화 완료: site_code={site_code}, count={len(result.data) if result.data else 0}")
             return True
         except Exception as e:
             logger.error(f"기존 스크립트 비활성화 실패: {e}")
@@ -583,7 +567,6 @@ class DatabaseHelper:
             client = self._get_client(use_admin=True)
             result = client.table('site_scripts').delete().eq('user_id', user_id).eq('site_code', site_code).execute()
             
-            logger.info(f"기존 스크립트 삭제 완료: site_code={site_code}, count={len(result.data) if result.data else 0}")
             return True
         except Exception as e:
             logger.error(f"기존 스크립트 삭제 실패: {e}")
@@ -612,9 +595,7 @@ class DatabaseHelper:
             script_data = None
             if result.data:
                 script_data = result.data[0]
-                logger.info(f"공개 스크립트 조회 성공: site_code={site_code}")
             else:
-                logger.info(f"공개 스크립트 없음: site_code={site_code}")
                 # 스크립트가 없어도 Free 사용자용 태그를 위해 기본 구조 생성
                 script_data = {
                     'site_code': site_code,
@@ -685,13 +666,9 @@ class DatabaseHelper:
                 if domain:
                     if not domain.startswith(('http://', 'https://')):
                         domain = f"https://{domain}"
-                    logger.info(f"사이트 도메인 조회 성공: site_code={site_code}, domain={domain}")
                     return domain
-                
-                logger.info(f"사이트 도메인이 비어있음: site_code={site_code}")
                 return None
             else:
-                logger.info(f"사이트 도메인 없음: site_code={site_code}")
                 return None
         except Exception as e:
             logger.error(f"사이트 도메인 조회 실패: {e}")
@@ -710,11 +687,6 @@ class DatabaseHelper:
             
             client = self._get_client(use_admin=True)
             result = client.table('site_scripts').insert(script_data).execute()
-            
-            if result.data:
-                logger.info(f"기본 스크립트 데이터 생성 완료: site_code={site_code}")
-            else:
-                logger.warning(f"기본 스크립트 데이터 생성 실패: site_code={site_code}")
                 
         except Exception as e:
             logger.error(f"기본 스크립트 데이터 생성 중 오류: {e}")
@@ -758,7 +730,6 @@ class DatabaseHelper:
             result = client.table('user_memberships').insert(membership_data).execute()
             
             if result.data:
-                logger.info(f"사용자 멤버십 생성 완료: user_id={user_id}, level={membership_level}")
                 return result.data[0]
             return {}
         except Exception as e:

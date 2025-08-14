@@ -33,7 +33,6 @@ async def get_threads(
     user=Depends(get_current_user),
     thread_service: ThreadService = Depends(get_thread_service)
 ):
-    print(f"[ROUTER] get_threads 스레드 조회 요청: user={user.id}")
     """사용자의 모든 스레드 목록을 조회하는 API"""
     
     try:
@@ -168,7 +167,6 @@ async def get_thread(
     user=Depends(get_current_user),
     thread_service: ThreadService = Depends(get_thread_service)
 ):
-    print(f"[ROUTER] get_thread 스레드 조회 요청: thread_id={thread_id}, user={user.id}")
     """특정 스레드의 상세 정보를 조회하는 API"""
     
     try:
@@ -438,7 +436,6 @@ async def create_message(
     thread_service: ThreadService = Depends(get_thread_service)
 ):
     """새로운 메시지를 생성하는 API"""
-    print(f"[ROUTER] create_message 메시지 생성 요청: user={user.id}")
     try:
         request_data = await request.json()
         thread_id = request_data.get("thread_id")
@@ -448,8 +445,6 @@ async def create_message(
         site_code = request_data.get("site_code")
         auto_deploy = request_data.get("auto_deploy", False)
         image_data = request_data.get("image_data")
-
-        print(f"[ROUTER] create_message 요청 데이터: site_code={site_code}")
         
         # 이미지 데이터 검증
         if image_data:

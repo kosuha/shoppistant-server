@@ -18,7 +18,6 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 @router.get("", response_model=None)
 async def get_site_scripts(site_code: str, user=Depends(get_current_user)):
     """특정 사이트의 현재 스크립트를 조회하는 API"""
-    print(f"[ROUTER] get_site_scripts 스크립트 조회 요청: site_code={site_code}, user={user.id}")
     from main import script_service
     
     try:

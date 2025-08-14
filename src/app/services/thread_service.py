@@ -248,7 +248,6 @@ class ThreadService:
             return {"success": False, "error": str(e), "status_code": 500}
 
     async def create_message(self, user_id: str, site_code: str, thread_id: str, message: str, message_type: str = "user", metadata: Optional[str] = None, auto_deploy: bool = False, image_data: Optional[List[str]] = None) -> Dict[str, Any]:
-        print(f"[THREAD SERVICE] create_message 메시지 생성 요청: user={user_id}, thread={thread_id}, type={message_type} message={message[:50]} metadata={metadata} auto_deploy={auto_deploy}")
         """
         새로운 메시지를 생성합니다.
         사용자가 메시지를 보내면 자동으로 AI 응답을 생성하여 저장합니다.
@@ -273,14 +272,10 @@ class ThreadService:
             # 메시지 길이 제한 (2000자)
             message = message[:2000]
 
-            print(f"[THREAD SERVICE] create_message 메시지 내용: {message[:50]}...")  # 메시지 내용 미리보기
-
             # 스레드가 존재하고 사용자 소유인지 확인
             thread = await self.db_helper.get_thread_by_id(user_id, thread_id)
             if not thread:
                 return {"success": False, "error": "스레드를 찾을 수 없습니다.", "status_code": 404}
-
-            print(f"[THREAD SERVICE] 스레드 소유확인")
 
             # 멤버십 제한사항 확인
             if image_data:
@@ -299,8 +294,6 @@ class ThreadService:
                 if is_duplicate:
                     return {"success": False, "error": "중복 메시지입니다. 잠시 후 다시 시도해주세요.", "status_code": 409}
 
-            print(f"[THREAD SERVICE] 메시지 중복확인")
-
             # 스레드의 첫 메시지인 경우, 스레드의 title을 메시지로 설정
             if not thread.get('title'):
                 try:
@@ -309,8 +302,6 @@ class ThreadService:
                     thread['title'] = message  # 메모리에서도 업데이트
                 except Exception as title_error:
                     logger.error(f"스레드 제목 업데이트 실패: {title_error}")
-
-            print(f"[THREAD SERVICE] 스레드 제목 업데이트: {thread.get('title')}")
 
             # 2. 사용자 메시지 저장 (사용자 메시지는 즉시 completed 상태)
             user_message = await self.db_helper.create_message(
@@ -322,7 +313,6 @@ class ThreadService:
                 status='completed' if message_type == 'user' else 'pending',
                 image_data=image_data
             )
-            print(f"[THREAD SERVICE] 사용자 메시지 저장 완료: {user_message}")
             
             if not user_message:
                 return {"success": False, "error": "메시지 저장에 실패했습니다.", "status_code": 500}

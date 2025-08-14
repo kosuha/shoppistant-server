@@ -20,8 +20,6 @@ class AuthService(BaseService, IAuthService):
 
     async def verify_auth(self, credentials: HTTPAuthorizationCredentials):
         """JWT 토큰 검증 - 새로운 구조"""
-        self.logger.info("##### CALL FUNCTION: verify_auth")
-        print("##### CALL FUNCTION: verify_auth")  # print도 유지
         
         try:
             user = await self._verify_token_internal(credentials)
@@ -41,7 +39,6 @@ class AuthService(BaseService, IAuthService):
             if response.user is None:
                 raise AuthenticationException("유효하지 않은 토큰입니다")
             
-            print(f"Authenticated user: {response.user.id} - {response.user.email}")
             self.logger.info(f"사용자 인증 성공: {response.user.id} - {response.user.email}")
             
             # 프로필 자동 생성/확인

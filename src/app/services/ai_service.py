@@ -187,37 +187,16 @@ class AIService:
             
             # 응답에서 텍스트 추출 (디버깅 로그 추가)
             structured_response = ""
-            logger.info(f"Gemini API 응답 구조 확인:")
-            logger.info(f"- hasattr(response, 'text'): {hasattr(response, 'text')}")
-            if hasattr(response, 'text'):
-                logger.info(f"- response.text: {response.text}")
-            logger.info(f"- hasattr(response, 'candidates'): {hasattr(response, 'candidates')}")
-            if hasattr(response, 'candidates'):
-                logger.info(f"- len(response.candidates): {len(response.candidates) if response.candidates else 0}")
             
             if hasattr(response, 'text') and response.text:
                 structured_response = response.text
-                logger.info(f"응답 텍스트 추출 성공 (response.text): {len(structured_response)}자")
             elif hasattr(response, 'candidates') and response.candidates:
                 candidate = response.candidates[0]
-                logger.info(f"첫 번째 후보에서 텍스트 추출 시도")
-                logger.info(f"- hasattr(candidate, 'content'): {hasattr(candidate, 'content')}")
                 if hasattr(candidate, 'content') and candidate.content:
-                    logger.info(f"- hasattr(candidate.content, 'parts'): {hasattr(candidate.content, 'parts')}")
                     if hasattr(candidate.content, 'parts') and candidate.content.parts:
-                        logger.info(f"- len(candidate.content.parts): {len(candidate.content.parts)}")
                         for i, part in enumerate(candidate.content.parts):
-                            logger.info(f"- part[{i}] hasattr text: {hasattr(part, 'text')}")
                             if hasattr(part, 'text') and part.text:
-                                logger.info(f"- part[{i}] text length: {len(part.text)}")
                                 structured_response += part.text
-            else:
-                logger.error("응답에서 텍스트를 추출할 수 없습니다.")
-                logger.info(f"응답 전체 구조: {type(response)}")
-                logger.info(f"응답 속성들: {dir(response)}")
-            
-            logger.info(f"최종 추출된 응답 길이: {len(structured_response)}자")
-            print("#########\n", structured_response)
             
             # JSON 추출 및 파싱 (코드 블록 외부 응답 제거)
             def extract_json_only(response_text):
