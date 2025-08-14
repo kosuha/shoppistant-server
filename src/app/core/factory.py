@@ -46,8 +46,10 @@ class ServiceFactory:
         container.register_singleton(IDatabaseHelper, db_helper)
         container.register_singleton(DatabaseHelper, db_helper)  # 하위 호환성
         
-        # 서비스 클래스 등록 (의존성 자동 해결)
-        container.register_service(IAuthService, AuthService)
+        # AuthService는 admin 클라이언트가 필요하므로 직접 생성
+        auth_service = AuthService(supabase_client, db_helper, supabase_admin)
+        container.register_singleton(IAuthService, auth_service)
+        container.register_singleton(AuthService, auth_service)
         container.register_service(IScriptService, ScriptService)
         
         # ImwebService는 설정값이 필요하므로 직접 생성
@@ -67,8 +69,7 @@ class ServiceFactory:
         container.register_service(IThreadService, ThreadService)
         container.register_service(IMembershipService, MembershipService)
         
-        # 하위 호환성을 위한 구체 클래스도 등록
-        container.register_service(AuthService, AuthService)
+        # AuthService는 이미 위에서 싱글톤으로 등록됨
         container.register_service(ScriptService, ScriptService)
         # AIService는 이미 위에서 싱글톤으로 등록됨
         container.register_service(ThreadService, ThreadService)

@@ -949,3 +949,82 @@ class DatabaseHelper:
         except Exception as e:
             logger.error(f"요청 로그 정리 실패: {e}")
             return 0
+    
+    # 사용자 계정 삭제 관련 함수들
+    async def delete_all_user_data(self, user_id: str) -> bool:
+        """사용자의 모든 데이터 완전 삭제"""
+        try:
+            client = self._get_client(use_admin=True)
+            deleted_tables = []
+            
+            # 1. 채팅 메시지 삭제
+            try:
+                result = client.table('chat_messages').delete().eq('user_id', user_id).execute()
+                deleted_tables.append(f"chat_messages: {len(result.data) if result.data else 0}개")
+            except Exception as e:
+                logger.warning(f"채팅 메시지 삭제 실패: {e}")
+            
+            # 2. 채팅 스레드 삭제
+            try:
+                result = client.table('chat_threads').delete().eq('user_id', user_id).execute()
+                deleted_tables.append(f"chat_threads: {len(result.data) if result.data else 0}개")
+            except Exception as e:
+                logger.warning(f"채팅 스레드 삭제 실패: {e}")
+            
+            # 3. 사이트 스크립트 삭제
+            try:
+                result = client.table('site_scripts').delete().eq('user_id', user_id).execute()
+                deleted_tables.append(f"site_scripts: {len(result.data) if result.data else 0}개")
+            except Exception as e:
+                logger.warning(f"사이트 스크립트 삭제 실패: {e}")
+            
+            # 4. 사용자 사이트 삭제
+            try:
+                result = client.table('user_sites').delete().eq('user_id', user_id).execute()
+                deleted_tables.append(f"user_sites: {len(result.data) if result.data else 0}개")
+            except Exception as e:
+                logger.warning(f"사용자 사이트 삭제 실패: {e}")
+            
+            # 5. 사용자 멤버십 삭제
+            try:
+                result = client.table('user_memberships').delete().eq('user_id', user_id).execute()
+                deleted_tables.append(f"user_memberships: {len(result.data) if result.data else 0}개")
+            except Exception as e:
+                logger.warning(f"사용자 멤버십 삭제 실패: {e}")
+            
+            # 6. 일일 요청 로그 삭제
+            try:
+                result = client.table('daily_request_logs').delete().eq('user_id', user_id).execute()
+                deleted_tables.append(f"daily_request_logs: {len(result.data) if result.data else 0}개")
+            except Exception as e:
+                logger.warning(f"일일 요청 로그 삭제 실패: {e}")
+            
+            # 7. 시스템 로그에서 해당 사용자 관련 데이터 삭제 (선택적)
+            try:
+                result = client.table('system_logs').delete().eq('user_id', user_id).execute()
+                deleted_tables.append(f"system_logs: {len(result.data) if result.data else 0}개")
+            except Exception as e:
+                logger.warning(f"시스템 로그 삭제 실패: {e}")
+            
+            logger.info(f"사용자 데이터 삭제 완료 - 사용자 ID: {user_id}, 삭제된 데이터: {', '.join(deleted_tables)}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"사용자 데이터 삭제 실패: {e}")
+            return False
+    
+    async def delete_user_profile(self, user_id: str) -> bool:
+        """사용자 프로필 삭제"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('user_profiles').delete().eq('id', user_id).execute()
+            
+            if result.data:
+                logger.info(f"사용자 프로필 삭제 완료: {user_id}")
+                return True
+            else:
+                logger.warning(f"사용자 프로필 삭제 실패 (프로필이 존재하지 않음): {user_id}")
+                return True  # 이미 삭제된 것으로 간주
+        except Exception as e:
+            logger.error(f"사용자 프로필 삭제 실패: {e}")
+            return False
