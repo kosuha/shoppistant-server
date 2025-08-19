@@ -371,30 +371,6 @@ class DatabaseHelper:
             logger.error(f"스레드 제목 업데이트 실패: {e}")
             return False
     
-    async def health_check(self) -> Dict[str, Any]:
-        """데이터베이스 연결 상태 확인"""
-        try:
-            # admin_client가 있는지 확인
-            if not self.admin_client:
-                logger.error("admin_client가 None입니다")
-                raise Exception("admin_client not available")
-            
-            # system_stats 테이블로 헬스체크
-            result = self.admin_client.table('system_stats').select('count').eq('stat_name', 'health_check').execute()
-            return {
-                'status': 'healthy',
-                'connected': True,
-                'timestamp': datetime.now().isoformat()
-            }
-        except Exception as e:
-            logger.error(f"데이터베이스 헬스 체크 실패: {e}")
-            return {
-                'status': 'unhealthy',
-                'connected': False,
-                'error': str(e),
-                'timestamp': datetime.now().isoformat()
-            }
-    
     # Site Scripts 관련 함수들
     
     async def update_site_script_separated(self, user_id: str, site_code: str, css_content: str, js_content: str) -> Dict[str, Any]:

@@ -76,6 +76,7 @@ security = HTTPBearer()
 # Graceful shutdown을 위한 글로벌 변수
 shutdown_event = asyncio.Event()
 
+
 def signal_handler(signum, frame):
     """SIGINT (Ctrl+C) 및 SIGTERM 처리"""
     shutdown_event.set()
@@ -83,39 +84,28 @@ def signal_handler(signum, frame):
     import sys
     sys.exit(0)
 
-# Signal handlers 등록
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # 시작 시 데이터베이스 초기화
+    # 시작 시 데이터베이스 초기화 (DB 헬스체크 생략)
     global db_connected
-    
-    
-    # 데이터베이스 연결 상태 확인
+
+    # DB 헬스체크 없이 낙관적으로 시작하고, 로그 기록 실패 시만 플래그 내림
+    db_connected = True
     try:
-        health_status = await db_helper.health_check()
-        db_connected = health_status.get('connected', False)
-        if db_connected:
-            # 시스템 시작 로그 기록
-            await db_helper.log_system_event(
-                event_type='server_start',
-                event_data={'status': 'success', 'timestamp': datetime.now().isoformat()}
-            )
-        else:
-            logger.error("데이터베이스 연결 실패")
+        await db_helper.log_system_event(
+            event_type='server_start',
+            event_data={'status': 'success', 'timestamp': datetime.now().isoformat()}
+        )
     except Exception as e:
-        logger.error(f"데이터베이스 초기화 실패: {e}")
+        logger.error(f"시작 로그 기록 실패(헬스체크 미수행): {e}")
         db_connected = False
-    
-    # 백그라운드 스케줄러 초기화
-    if db_connected:
-        try:
-            await initialize_scheduler(db_helper)
-        except Exception as e:
-            logger.error(f"백그라운드 스케줄러 초기화 실패: {e}")
-    
+
+    # 백그라운드 스케줄러 초기화 (헬스체크 없이 시도)
+    try:
+        await initialize_scheduler(db_helper)
+    except Exception as e:
+        logger.error(f"백그라운드 스케줄러 초기화 실패: {e}")
+
     
     yield
     
@@ -155,7 +145,6 @@ async def lifespan(_app: FastAPI):
             )
         except Exception as e:
             logger.error(f"종료 로그 기록 실패: {e}")
-    
 
 app = FastAPI(
     title="Imweb AI Agent Server", 
@@ -203,29 +192,16 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    try:
-        # 데이터베이스 상태 확인
-        db_health = await db_helper.health_check()
-        
-        return success_response(
-            data={
-                "database": db_health,
-                "timestamp": datetime.now().isoformat(),
-                "version": "1.0.0",
-                "environment": "development" if settings.DEBUG else "production"
-            },
-            message="헬스 체크 성공"
-        )
-    except Exception as e:
-        logger.error(f"헬스 체크 실패: {e}")
-        return error_response(
-            message="헬스 체크 실패",
-            error_code="HEALTH_CHECK_FAILED",
-            data={
-                "error": str(e),
-                "timestamp": datetime.now().isoformat()
-            }
-        )
+    # DB 헬스체크를 수행하지 않고 정적 상태만 반환
+    return success_response(
+        data={
+            "database": {"checked": False},
+            "timestamp": datetime.now().isoformat(),
+            "version": "1.0.0",
+            "environment": "development" if settings.DEBUG else "production"
+        },
+        message="헬스 체크(DB 미검사)"
+    )
 
 @app.get("/api/v1/status")
 async def api_status():
@@ -255,9 +231,20 @@ app.include_router(membership_router.router)  # 멤버십 관리 라우터
 app.include_router(version_router.router)  # 버전 관리 라우터
 
 if __name__ == "__main__":
+    # 메인 스레드에서만 신호 핸들러 등록
+    try:
+        import threading
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGINT, signal_handler)
+            signal.signal(signal.SIGTERM, signal_handler)
+        else:
+            logger.warning("메인 스레드가 아니므로 signal 핸들러 등록을 건너뜁니다")
+    except Exception as e:
+        logger.warning(f"signal 핸들러 등록 실패, uvicorn 기본 처리에 위임: {e}")
+
     uvicorn.run(
-        app, 
-        host=settings.HOST, 
+        app,
+        host=settings.HOST,
         port=settings.PORT,
         log_level=settings.LOG_LEVEL.lower(),
         reload=settings.DEBUG
