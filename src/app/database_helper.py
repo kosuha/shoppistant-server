@@ -869,6 +869,92 @@ class DatabaseHelper:
             logger.error(f"일일 요청 수 조회 실패: {e}")
             return 0
     
+    # Token Wallet & Transactions
+    async def get_user_wallet(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """사용자 토큰 지갑 조회 (없으면 생성)"""
+        try:
+            client = self._get_client(use_admin=True)
+            result = client.table('user_token_wallets').select('*').eq('user_id', user_id).execute()
+            if result.data and len(result.data) > 0:
+                return result.data[0]
+            # ensure wallet exists explicitly
+            try:
+                client.rpc('ensure_user_wallet', { 'p_user_id': user_id }).execute()
+            except Exception:
+                pass
+            result2 = client.table('user_token_wallets').select('*').eq('user_id', user_id).execute()
+            return result2.data[0] if result2.data else None
+        except Exception as e:
+            logger.error(f"지갑 조회 실패: {e}")
+            return None
+
+    async def credit_wallet(self, user_id: str, amount_usd: float, metadata: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+        """지갑 충전 및 거래 기록"""
+        try:
+            client = self._get_client(use_admin=True)
+            # credit via RPC to bypass RLS
+            rpc_res = client.rpc('wallet_credit', { 'p_user_id': user_id, 'p_amount': amount_usd }).execute()
+            new_balance = rpc_res.data if hasattr(rpc_res, 'data') else None
+            # record transaction
+            tx = client.table('token_transactions').insert({
+                'user_id': user_id,
+                'type': 'credit',
+                'amount_usd': amount_usd,
+                'balance_after': new_balance,
+                'metadata': (metadata or {})
+            }).execute()
+            return tx.data[0] if tx.data else {'balance_after': new_balance}
+        except Exception as e:
+            logger.error(f"지갑 충전 실패: {e}")
+            return None
+
+    async def debit_wallet_for_ai(self, user_id: str, amount_usd: float, usage: Dict[str, Any], thread_id: str = None, message_id: str = None) -> Dict[str, Any]:
+        """AI 호출 비용 차감 및 거래 기록. 잔액 부족 시 exceeded=True 반환"""
+        try:
+            client = self._get_client(use_admin=True)
+            try:
+                rpc_res = client.rpc('wallet_debit', { 'p_user_id': user_id, 'p_amount': amount_usd }).execute()
+                new_balance = rpc_res.data if hasattr(rpc_res, 'data') else None
+            except Exception as e:
+                # detect insufficient funds from message
+                msg = str(e)
+                if 'INSUFFICIENT_FUNDS' in msg or 'insufficient' in msg.lower():
+                    wallet = await self.get_user_wallet(user_id)
+                    return { 'success': False, 'exceeded': True, 'balance': wallet.get('balance_usd', 0) if wallet else 0 }
+                raise
+
+            # record transaction
+            tx_meta = {
+                'model_pricing': usage,
+            }
+            tx = client.table('token_transactions').insert({
+                'user_id': user_id,
+                'type': 'debit',
+                'amount_usd': amount_usd,
+                'balance_after': new_balance,
+                'model_name': usage.get('model_name'),
+                'input_tokens': usage.get('input_tokens'),
+                'output_tokens': usage.get('output_tokens'),
+                'thoughts_tokens': usage.get('thoughts_tokens'),
+                'thread_id': thread_id,
+                'message_id': message_id,
+                'metadata': tx_meta
+            }).execute()
+            return { 'success': True, 'balance': new_balance, 'transaction': (tx.data[0] if tx.data else None) }
+        except Exception as e:
+            logger.error(f"AI 비용 차감 실패: {e}")
+            return { 'success': False, 'error': str(e) }
+
+    async def get_token_transactions(self, user_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """사용자 토큰 거래 내역 조회"""
+        try:
+            client = self._get_client(use_admin=True)
+            res = client.table('token_transactions').select('*').eq('user_id', user_id).order('created_at', desc=True).limit(limit).execute()
+            return res.data or []
+        except Exception as e:
+            logger.error(f"토큰 거래 내역 조회 실패: {e}")
+            return []
+
     async def check_daily_request_limit(self, user_id: str, limit: int) -> Dict[str, Any]:
         """사용자의 일일 요청 제한 확인"""
         try:

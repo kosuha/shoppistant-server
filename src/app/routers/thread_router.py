@@ -125,6 +125,27 @@ async def create_thread(
         })
 
 
+@router.get("/wallet")
+async def get_wallet(
+    user=Depends(get_current_user)
+):
+    """간단한 지갑 조회 (클라이언트 편의)"""
+    try:
+        from main import db_helper
+        wallet = await db_helper.get_user_wallet(user.id)
+        return JSONResponse(status_code=200, content={
+            "status": "success",
+            "data": wallet or {"balance_usd": 0, "total_spent_usd": 0},
+            "message": "지갑 조회 성공"
+        })
+    except Exception as e:
+        logger.error(f"지갑 조회 실패: {e}")
+        return JSONResponse(status_code=500, content={
+            "status": "error",
+            "message": str(e)
+        })
+
+
 @router.patch("/messages/{message_id}/status")
 async def update_message_status(
     message_id: str,

@@ -36,6 +36,43 @@ def set_dependencies(user_dependency, membership_svc):
     global membership_service
     membership_service = membership_svc
 
+@router.get("/wallet")
+async def get_wallet(current_user = Depends(get_current_user)):
+    """사용자 지갑 잔액 및 요약 조회"""
+    try:
+        from main import db_helper
+        wallet = await db_helper.get_user_wallet(current_user.id)
+        if not wallet:
+            return success_response(data={"balance_usd": 0, "total_spent_usd": 0}, message="지갑 생성됨")
+        return success_response(data=wallet, message="지갑 조회 성공")
+    except Exception as e:
+        logger.error(f"지갑 조회 실패: {e}")
+        return error_response(message="지갑 조회 실패", error_code="WALLET_FETCH_ERROR")
+
+@router.get("/wallet/transactions")
+async def list_wallet_transactions(limit: int = 20, current_user = Depends(get_current_user)):
+    try:
+        from main import db_helper
+        txs = await db_helper.get_token_transactions(current_user.id, limit)
+        return success_response(data={"transactions": txs}, message="거래 내역 조회 성공")
+    except Exception as e:
+        logger.error(f"거래 내역 조회 실패: {e}")
+        return error_response(message="거래 내역 조회 실패", error_code="WALLET_TX_FETCH_ERROR")
+
+@router.post("/wallet/credit")
+async def credit_wallet(amount_usd: float, current_user = Depends(get_current_user)):
+    """테스트/운영용 크레딧 충전 엔드포인트 (권한 체크는 별도 구성 필요)"""
+    try:
+        from main import db_helper
+        res = await db_helper.credit_wallet(current_user.id, amount_usd)
+        if not res:
+            return error_response(message="충전에 실패했습니다", error_code="WALLET_CREDIT_FAILED")
+        wallet = await db_helper.get_user_wallet(current_user.id)
+        return success_response(data={"wallet": wallet, "transaction": res}, message="충전 성공")
+    except Exception as e:
+        logger.error(f"충전 실패: {e}")
+        return error_response(message="충전 실패", error_code="WALLET_CREDIT_ERROR")
+
 @router.get("", response_model=MembershipResponse)
 async def get_membership(
     current_user = Depends(get_current_user)
@@ -378,7 +415,6 @@ async def get_membership_limits(
             data={
                 "membership_level": membership_level,
                 "limits": {
-                    "daily_requests": features.daily_requests,
                     "max_sites": features.max_sites,
                     "max_image_uploads": features.max_image_uploads,
                     "max_thread_history": features.max_thread_history,

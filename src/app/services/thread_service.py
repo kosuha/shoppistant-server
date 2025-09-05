@@ -5,6 +5,7 @@ from services.script_service import ScriptService
 from database_helper import DatabaseHelper
 from services.ai_service import AIService
 from core.membership_config import MembershipConfig
+from core.token_calculator import TokenUsageCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +322,16 @@ class ThreadService:
             ai_message = None
             if message_type == "user":
                 try:
+                    # 사전 잔액 확인 (최소 예상 비용의 보수적 하한 검사)
+                    try:
+                        wallet = await self.db_helper.get_user_wallet(user_id)
+                        current_balance = (wallet or {}).get('balance_usd', 0)
+                        # 아주 작은 최소금액(예: $0.005) 없으면 안내
+                        min_required = 0.005
+                        if current_balance < min_required:
+                            return {"success": False, "error": "크레딧이 부족합니다. 충전 후 다시 시도해주세요.", "status_code": 402}
+                    except Exception:
+                        pass
                     # 먼저 pending 상태의 AI 메시지 생성
                     ai_message = await self.db_helper.create_message(
                         requesting_user_id=user_id,
@@ -344,49 +355,17 @@ class ThreadService:
                     
                     # 스레드의 전체 대화 내역 조회 (새로 추가된 사용자 메시지 포함)
                     chat_history = await self.db_helper.get_thread_messages(user_id, thread_id)
-                    
-                    # 일일 요청 제한 확인
-                    membership = await self.db_helper.get_user_membership(user_id)
-                    membership_level = membership.get('membership_level', 0) if membership else 0
-                    features = MembershipConfig.get_features(membership_level)
-                    
-                    # skip_ai_generation 변수를 먼저 초기화
-                    skip_ai_generation = False
-                    
-                    if features.daily_requests != -1:
-                        current_count = await self.db_helper.get_daily_request_count(user_id)
-                        if current_count >= features.daily_requests:
-                            # 제한 초과 시 AI 응답 대신 안내 메시지 전송
-                            limit_message = f"죄송합니다. 오늘의 메시지 전송 횟수({features.daily_requests}회)를 모두 사용하셨습니다.\n\n" \
-                                          f"내일 0시에 요청 횟수가 초기화됩니다.\n" \
-                                          f"더 많은 메시지를 보내시려면 요금제를 업그레이드해주세요!"
-                            
-                            # 제한 안내 메시지로 AI 응답 대체
-                            ai_response = limit_message
-                            ai_metadata = {"rate_limited": True, "daily_limit": features.daily_requests}
-                            
-                            # AI 응답 생성을 건너뛰고 바로 메시지 업데이트로 이동
-                            skip_ai_generation = True
-                    
-                    if not skip_ai_generation:
-                        # AI 응답 생성 (메타데이터 및 사이트 코드, 이미지 데이터 포함)
-                        ai_response_result = await self.ai_service.generate_gemini_response(chat_history, user_id, metadata, site_code, image_data)
-                        
-                        # 일일 요청 수 증가 (정상 AI 응답인 경우에만)
-                        await self.db_helper.increment_daily_request(user_id, 'message_send')
-                    
-                    # AI 응답 결과 처리
-                    if not skip_ai_generation:
-                        # AI 응답 결과 검증
-                        if ai_response_result is None:
-                            raise ValueError("AI 서비스에서 None을 반환했습니다.")
-                        
-                        # 튜플 언패킹
-                        if isinstance(ai_response_result, tuple) and len(ai_response_result) == 2:
-                            ai_response, ai_metadata = ai_response_result
-                        else:
-                            raise ValueError(f"AI 서비스에서 예상치 못한 형태의 응답을 받았습니다: {type(ai_response_result)}")
-                    # skip_ai_generation이 True인 경우 ai_response와 ai_metadata는 이미 설정됨
+
+                    # AI 응답 생성 (메타데이터 및 사이트 코드, 이미지 데이터 포함)
+                    ai_response_result = await self.ai_service.generate_gemini_response(chat_history, user_id, metadata, site_code, image_data)
+
+                    # AI 응답 결과 검증 및 언패킹
+                    if ai_response_result is None:
+                        raise ValueError("AI 서비스에서 None을 반환했습니다.")
+                    if isinstance(ai_response_result, tuple) and len(ai_response_result) == 2:
+                        ai_response, ai_metadata = ai_response_result
+                    else:
+                        raise ValueError(f"AI 서비스에서 예상치 못한 형태의 응답을 받았습니다: {type(ai_response_result)}")
                     
                     if ai_metadata and auto_deploy:
                         if not isinstance(ai_metadata, dict):
@@ -415,6 +394,22 @@ class ThreadService:
                         if ai_metadata and 'token_usage' in ai_metadata:
                             cost_usd = ai_metadata['token_usage'].get('total_cost_usd', 0.0)
                             ai_model = ai_metadata['token_usage'].get('model_name', None)
+
+                        # 비용 차감 시도 (실제 사용량 기반)
+                        if cost_usd and cost_usd > 0:
+                            debit_res = await self.db_helper.debit_wallet_for_ai(
+                                user_id=user_id,
+                                amount_usd=cost_usd,
+                                usage=(ai_metadata.get('token_usage') if ai_metadata else {}),
+                                thread_id=thread_id,
+                                message_id=ai_message.get('id') if isinstance(ai_message, dict) else None
+                            )
+                            if not debit_res.get('success') and debit_res.get('exceeded'):
+                                # 잔액 부족 시 안내로 응답 대체하고 메시지 업데이트
+                                low_msg = "크레딧이 부족하여 응답을 제공할 수 없습니다. 충전 후 다시 시도해주세요."
+                                ai_response = low_msg
+                                # 비용을 0으로 처리
+                                cost_usd = 0.0
                         
                         # AI 응답에서 changes 데이터 처리 (통일된 형식)
                         changes_data = None

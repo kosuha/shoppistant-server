@@ -32,21 +32,21 @@ class MembershipConfig:
         MembershipLevel.FREE: MembershipFeatures(
             ai_model="gemini-2.5-flash",
             thinking_budget=-1,  # 사고 토큰
-            daily_requests=50,
+            daily_requests=-1,  # 무제한
             max_sites=2,
             is_image_uploads=True
         ),
         MembershipLevel.BASIC: MembershipFeatures(
             ai_model="gemini-2.5-flash",
             thinking_budget=-1,
-            daily_requests=50,
+            daily_requests=-1,  # 무제한
             max_sites=4,
             is_image_uploads=True,
         ),
         MembershipLevel.PREMIUM: MembershipFeatures(
             ai_model="gemini-2.5-pro",
             thinking_budget=-1,  # 무제한
-            daily_requests=100,
+            daily_requests=-1,  # 무제한
             max_sites=10,
             is_image_uploads=True,
         ),
