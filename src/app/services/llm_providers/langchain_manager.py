@@ -3,6 +3,7 @@ LangChain 기반 LLM 매니저: 다양한 공급자(OpenAI, Anthropic, Google) �
 """
 from __future__ import annotations
 from typing import Optional, Dict, Any, List, Tuple
+import json
 import logging
 
 from langchain_core.language_models import BaseLanguageModel
@@ -14,23 +15,13 @@ from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from core.config import settings
+from core.model_catalog import get_provider_mapping, get_supported_models as catalog_get_supported_models
 
 logger = logging.getLogger(__name__)
 
 # 프론트/서버가 공통으로 쓸 수 있는 모델 키 매핑
 # value: (provider, provider_model_name)
-MODEL_REGISTRY: Dict[str, Tuple[str, str]] = {
-    # Google Gemini (LangChain 경로)
-    "gemini-2.5-pro": ("google", "gemini-2.5-pro"),
-    "gemini-2.5-flash": ("google", "gemini-2.5-flash"),
-    "gemini-2.5-flash-lite": ("google", "gemini-2.5-flash-lite"),
-    "gpt-5": ("openai", "gpt-5"),
-    "gpt-5-mini": ("openai", "gpt-5-mini"),
-    "gpt-5-nano": ("openai", "gpt-5-nano"),
-    "claude-sonnet-4": ("anthropic", "claude-sonnet-4-20250514"),
-    "claude-opus-4": ("anthropic", "claude-opus-4-20250514"),
-    "claude-opus-4.1": ("anthropic", "claude-opus-4-1-20250805")
-}
+# MODEL_REGISTRY는 core.model_catalog에서 단일 관리
 
 ALLOWED_PROVIDERS = {"google", "openai", "anthropic"}
 
@@ -42,10 +33,10 @@ class LangChainLLMManager:
         pass
 
     def is_supported(self, model_key: str) -> bool:
-        return model_key in MODEL_REGISTRY
+        return get_provider_mapping(model_key) is not None
 
     def get_llm(self, model_key: str, temperature: float = 0.6) -> Optional[BaseLanguageModel]:
-        entry = MODEL_REGISTRY.get(model_key)
+        entry = get_provider_mapping(model_key)
         if not entry:
             return None
         provider, name = entry
@@ -63,10 +54,17 @@ class LangChainLLMManager:
                     return None
                 return ChatOpenAI(model=name, api_key=settings.OPENAI_API_KEY, temperature=temperature)
             elif provider == "anthropic":
-                if not settings.ANTHROPIC_API_KEY:
-                    logger.warning("ANTHROPIC_API_KEY 누락 - Anthropic 모델 사용 불가")
+                if not settings.CLAUDE_API_KEY:
+                    logger.warning("CLAUDE_API_KEY 누락 - Anthropic 모델 사용 불가")
                     return None
-                return ChatAnthropic(model=name, api_key=settings.ANTHROPIC_API_KEY, temperature=temperature)
+                # Claude 응답 잘림 방지를 위해 설정값으로 max_tokens 지정
+                max_toks = getattr(settings, "CLAUDE_MAX_TOKENS", 16000) or 16000
+                try:
+                    return ChatAnthropic(model=name, api_key=settings.CLAUDE_API_KEY, temperature=temperature, max_tokens=max_toks)
+                except TypeError:
+                    # 일부 버전 호환: .bind로 설정 시도
+                    base = ChatAnthropic(model=name, api_key=settings.CLAUDE_API_KEY, temperature=temperature)
+                    return base.bind(max_tokens=max_toks)
         except Exception as e:
             logger.error(f"LLM 생성 실패 ({model_key}): {e}")
             return None
@@ -79,7 +77,8 @@ class LangChainLLMManager:
 
     async def generate_with_meta(self, model_key: str, system_prompt: str, user_input: str,
                                  temperature: float = 0.6,
-                                 images: Optional[List[str]] = None) -> Tuple[Optional[str], Dict[str, Any]]:
+                                 images: Optional[List[str]] = None,
+                                 structured_schema: Optional[Any] = None) -> Tuple[Optional[str], Dict[str, Any]]:
         """
         멀티모달 입력 지원 생성 함수.
         images: data URI(예: data:image/png;base64,...) 또는 일반 URL 문자열 목록
@@ -89,78 +88,246 @@ class LangChainLLMManager:
             return None, {}
 
         try:
+            mapping = get_provider_mapping(model_key)
+            provider = mapping[0] if mapping else None
+            # Gemini는 structured_output 사용 시 메타데이터가 유실되는 경우가 있어 비활성화
+            use_structured = (structured_schema is not None) and (provider != "google")
+
             # 이미지가 없으면 기존 프롬프트 체인 사용
             if not images:
                 prompt = self.build_chain(system_prompt)
-                chain = prompt | llm
-                result = await chain.ainvoke({"input": user_input})
+                if use_structured:
+                    try:
+                        # include_raw=True로 원본 메타를 함께 받는다
+                        structured_llm = llm.with_structured_output(structured_schema, include_raw=True)
+                        chain = prompt | structured_llm
+                        result = await chain.ainvoke({"input": user_input})
+                    except Exception:
+                        use_structured = False
+                        chain = prompt | llm
+                        result = await chain.ainvoke({"input": user_input})
+                else:
+                    chain = prompt | llm
+                    result = await chain.ainvoke({"input": user_input})
             else:
                 # 멀티모달 메시지 구성: 공통 포맷 사용 (text + image_url)
                 human_content: List[Dict[str, Any]] = [{"type": "text", "text": user_input}]
-                provider, _ = MODEL_REGISTRY.get(model_key, (None, None))
                 for img in images:
                     if not (isinstance(img, str) and img.strip()):
                         continue
                     url = img.strip()
                     if provider == "openai":
-                        # OpenAI: image_url는 객체 형식 사용
-                        human_content.append({
-                            "type": "image_url",
-                            "image_url": {"url": url}
-                        })
+                        human_content.append({"type": "image_url", "image_url": {"url": url}})
                     elif provider == "google":
-                        # Google: 문자열로 허용됨 (data URL 포함)
-                        human_content.append({
-                            "type": "image_url",
-                            "image_url": url
-                        })
+                        human_content.append({"type": "image_url", "image_url": url})
                     elif provider == "anthropic":
-                        # Anthropic: data URL -> base64 / mime 로 변환, 아니면 url 소스로 전달
                         if url.startswith("data:image/") and "," in url:
                             try:
                                 header, b64 = url.split(",", 1)
                                 mime = header.split(":", 1)[1].split(";", 1)[0]
                                 human_content.append({
                                     "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": mime,
-                                        "data": b64,
-                                    }
+                                    "source": {"type": "base64", "media_type": mime, "data": b64},
                                 })
                             except Exception:
-                                # 실패 시 URL로 처리 시도
-                                human_content.append({
-                                    "type": "image",
-                                    "source": {"type": "url", "url": url}
-                                })
+                                human_content.append({"type": "image", "source": {"type": "url", "url": url}})
                         else:
-                            human_content.append({
-                                "type": "image",
-                                "source": {"type": "url", "url": url}
-                            })
-                messages = [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=human_content),
-                ]
-                result = await llm.ainvoke(messages)
+                            human_content.append({"type": "image", "source": {"type": "url", "url": url}})
+                messages = [SystemMessage(content=system_prompt), HumanMessage(content=human_content)]
+                if use_structured:
+                    try:
+                        structured_llm = llm.with_structured_output(structured_schema, include_raw=True)
+                        result = await structured_llm.ainvoke(messages)
+                    except Exception:
+                        use_structured = False
+                        result = await llm.ainvoke(messages)
+                else:
+                    result = await llm.ainvoke(messages)
 
             text: Optional[str]
             meta: Dict[str, Any] = {}
-            if isinstance(result, AIMessage):
-                text = result.content if isinstance(result.content, str) else str(result.content)
-                meta = getattr(result, "response_metadata", {}) or {}
+            # 구조화 출력 경로 처리: include_raw=True 시 { parsed, raw } 형태 지원
+            if use_structured and not isinstance(result, AIMessage):
+                try:
+                    if isinstance(result, dict) and ("parsed" in result or "raw" in result):
+                        parsed = result.get("parsed")
+                        raw = result.get("raw")
+                        # 텍스트 직렬화
+                        if parsed is None:
+                            payload = result
+                        elif hasattr(parsed, "model_dump"):
+                            payload = parsed.model_dump(exclude_none=True, exclude_unset=True)
+                        elif hasattr(parsed, "dict"):
+                            payload = parsed.dict()
+                        else:
+                            payload = parsed
+                        if isinstance(payload, (dict, list)):
+                            text = json.dumps(payload, ensure_ascii=False)
+                        else:
+                            text = str(payload)
+                        # 메타는 raw에서 추출 시도
+                        try:
+                            meta = getattr(raw, "response_metadata", {}) or {}
+                            # 추가로 additional_kwargs에 사용량이 실리는 경우 병합
+                            try:
+                                ak = getattr(raw, "additional_kwargs", {}) or {}
+                                if isinstance(ak, dict):
+                                    for k in ("usage_metadata", "usage", "token_usage"):
+                                        if k in ak and k not in meta:
+                                            meta[k] = ak[k]
+                                    for k in ("prompt_token_count", "candidates_token_count", "total_token_count",
+                                              "input_tokens", "output_tokens", "total_tokens"):
+                                        if k in ak and k not in meta:
+                                            meta[k] = ak[k]
+                            except Exception:
+                                pass
+                            if not meta and hasattr(raw, "message"):
+                                _msg = getattr(raw, "message")
+                                meta = getattr(_msg, "response_metadata", {}) or {}
+                                try:
+                                    ak = getattr(_msg, "additional_kwargs", {}) or {}
+                                    if isinstance(ak, dict):
+                                        for k in ("usage_metadata", "usage", "token_usage"):
+                                            if k in ak and k not in meta:
+                                                meta[k] = ak[k]
+                                        for k in ("prompt_token_count", "candidates_token_count", "total_token_count",
+                                                  "input_tokens", "output_tokens", "total_tokens"):
+                                            if k in ak and k not in meta:
+                                                meta[k] = ak[k]
+                                except Exception:
+                                    pass
+                            # ChatResult/LLMResult 형태 (generations) 처리
+                            if not meta and hasattr(raw, "generations"):
+                                try:
+                                    gens = getattr(raw, "generations") or []
+                                    # generations: List[List[ChatGeneration]]
+                                    first = gens[0][0] if gens and gens[0] else None
+                                    msg = getattr(first, "message", None)
+                                    if msg is not None:
+                                        meta = getattr(msg, "response_metadata", {}) or {}
+                                        ak = getattr(msg, "additional_kwargs", {}) or {}
+                                        if isinstance(ak, dict):
+                                            for k in ("usage_metadata", "usage", "token_usage"):
+                                                if k in ak and k not in meta:
+                                                    meta[k] = ak[k]
+                                            for k in ("prompt_token_count", "candidates_token_count", "total_token_count",
+                                                      "input_tokens", "output_tokens", "total_tokens"):
+                                                if k in ak and k not in meta:
+                                                    meta[k] = ak[k]
+                                except Exception:
+                                    pass
+                            # dict 형태로 떨어지는 경우
+                            if not meta and isinstance(raw, dict):
+                                try:
+                                    for k in ("response_metadata", "usage_metadata", "usage", "token_usage"):
+                                        if k in raw and not meta:
+                                            meta = raw.get(k) if k == "response_metadata" else {k: raw.get(k)}
+                                    # message가 dict로 들어있는 경우
+                                    if (not meta) and isinstance(raw.get("message"), dict):
+                                        rmsg = raw.get("message")
+                                        meta = rmsg.get("response_metadata", {}) or {}
+                                        for k in ("usage_metadata", "usage", "token_usage"):
+                                            if k in rmsg and k not in meta:
+                                                meta[k] = rmsg[k]
+                                        for k in ("prompt_token_count", "candidates_token_count", "total_token_count",
+                                                  "input_tokens", "output_tokens", "total_tokens"):
+                                            if k in rmsg and k not in meta:
+                                                meta[k] = rmsg[k]
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                    else:
+                        # 과거 경로: 파싱된 객체 직렬화
+                        if hasattr(result, "model_dump"):
+                            payload = result.model_dump(exclude_none=True, exclude_unset=True)
+                        elif hasattr(result, "dict"):
+                            payload = result.dict()
+                        else:
+                            payload = result
+                        if isinstance(payload, (dict, list)):
+                            text = json.dumps(payload, ensure_ascii=False)
+                        else:
+                            text = str(payload)
+                except Exception:
+                    text = str(result)
             else:
-                text = str(result)
+                if isinstance(result, AIMessage):
+                    text = result.content if isinstance(result.content, str) else str(result.content)
+                    meta = getattr(result, "response_metadata", {}) or {}
+                    # additional_kwargs에도 사용량이 담기는 경우가 있어 병합
+                    try:
+                        ak = getattr(result, "additional_kwargs", {}) or {}
+                        if isinstance(ak, dict):
+                            for k in ("usage_metadata", "usage", "token_usage"):
+                                if k in ak and k not in meta:
+                                    meta[k] = ak[k]
+                            for k in ("prompt_token_count", "candidates_token_count", "total_token_count",
+                                      "input_tokens", "output_tokens", "total_tokens"):
+                                if k in ak and k not in meta:
+                                    meta[k] = ak[k]
+                    except Exception:
+                        pass
+                else:
+                    text = str(result)
+
+            # include_raw=True 경로에서 raw가 있었지만 메타가 비었을 수 있으니 보조 확인
+            if use_structured and not meta and isinstance(result, dict) and "raw" in result:
+                raw = result.get("raw")
+                try:
+                    if hasattr(raw, "response_metadata"):
+                        meta = getattr(raw, "response_metadata") or {}
+                    elif hasattr(raw, "message"):
+                        msg = getattr(raw, "message")
+                        meta = getattr(msg, "response_metadata", {}) or {}
+                except Exception:
+                    pass
+
+            # 메타 정규화: 객체가 들어온 경우 dict로 변환하여 downstream 파서가 처리 가능하도록 보장
+            def _as_dict(val: Any) -> Optional[Dict[str, Any]]:
+                if isinstance(val, dict):
+                    return val
+                for attr in ("model_dump", "dict"):
+                    fn = getattr(val, attr, None)
+                    if callable(fn):
+                        try:
+                            d = fn()
+                            if isinstance(d, dict):
+                                return d
+                        except Exception:
+                            pass
+                if hasattr(val, "__dict__"):
+                    try:
+                        d = dict(getattr(val, "__dict__") or {})
+                        if isinstance(d, dict):
+                            return d
+                    except Exception:
+                        pass
+                # Known Gemini fields
+                try:
+                    fields = {}
+                    for k in ("prompt_token_count", "candidates_token_count", "total_token_count",
+                              "input_tokens", "output_tokens", "total_tokens"):
+                        if hasattr(val, k):
+                            fields[k] = getattr(val, k)
+                    return fields or None
+                except Exception:
+                    return None
+
+            if isinstance(meta, dict):
+                for k in ("usage_metadata", "usage", "token_usage"):
+                    if k in meta and not isinstance(meta[k], dict) and meta[k] is not None:
+                        converted = _as_dict(meta[k])
+                        if isinstance(converted, dict):
+                            meta[k] = converted
+
+            if settings.DEBUG_HTTP_LOGS:
+                try:
+                    logger.info("[LC META] model=%s use_structured=%s result_type=%s meta_keys=%s", model_key, use_structured, type(result).__name__, list(meta.keys()) if isinstance(meta, dict) else type(meta))
+                except Exception:
+                    pass
+
             return text, meta
         except Exception as e:
             logger.error(f"LangChain 생성 실패 ({model_key}): {e}")
             return None, {}
-
-    async def generate(self, model_key: str, system_prompt: str, user_input: str,
-                        temperature: float = 0.6) -> Optional[str]:
-        text, _ = await self.generate_with_meta(model_key, system_prompt, user_input, temperature)
-        return text
-
-    def get_supported_models(self) -> List[str]:
-        return list(MODEL_REGISTRY.keys())

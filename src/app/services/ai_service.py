@@ -1,16 +1,38 @@
 import uuid
 import asyncio
-from typing import List, Dict, Any, Tuple, Optional, Any as TypingAny
 import json
 import logging
+from typing import List, Dict, Any, Tuple, Optional, Any as TypingAny
 from database_helper import DatabaseHelper
-from schemas import AIScriptResponse
+from schemas import AIScriptResponse, AIChangeResponse
 from core.membership_config import MembershipConfig
 from core.token_calculator import TokenUsageCalculator
 from prompts.bren_assistant_prompt import get_english_prompt
 from services.llm_providers.langchain_manager import LangChainLLMManager
+from core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _trunc(s: Optional[str], n: Optional[int] = None) -> Optional[str]:
+    if s is None:
+        return None
+    try:
+        s = str(s)
+    except Exception:
+        return None
+    maxlen = n if isinstance(n, int) and n > 0 else (settings.DEBUG_HTTP_LOGS_MAXLEN if settings.DEBUG_HTTP_LOGS_MAXLEN and settings.DEBUG_HTTP_LOGS_MAXLEN > 0 else None)
+    if maxlen and len(s) > maxlen:
+        return s[:maxlen] + "…[truncated]"
+    return s
+
+
+def _mask_keys(d: Any, keys: List[str] = ["api_key", "Authorization", "authorization", "cookie"]) -> Any:
+    if isinstance(d, dict):
+        return {k: ("***" if k in keys else _mask_keys(v, keys)) for k, v in d.items()}
+    if isinstance(d, list):
+        return [_mask_keys(x, keys) for x in d]
+    return d
 
 
 class AIService:
@@ -80,24 +102,24 @@ class AIService:
             if not membership or int(membership.get('membership_level', 0)) <= 0:
                 return ("구독 후 이용 가능한 기능입니다.", None)
             membership_level = membership.get('membership_level', 0)
-            
+
             # 세션 ID 생성
             session_id = str(uuid.uuid4())
 
-            # 대화 내역을 Gemini 형식으로 변환
+            # 대화 내역을 텍스트로 변환
             contents = []
             for msg in chat_history:
                 created_at = msg.get('created_at', '')
-                if msg["message_type"] == "user":
-                    contents.append(f"User ({created_at}): {msg['message']}")
-                elif msg["message_type"] == "assistant":
-                    contents.append(f"Assistant ({created_at}): {msg['message']}")
-            
+                if msg.get("message_type") == "user":
+                    contents.append(f"User ({created_at}): {msg.get('message', '')}")
+                elif msg.get("message_type") == "assistant":
+                    contents.append(f"Assistant ({created_at}): {msg.get('message', '')}")
             conversation_context = "\n".join(contents)
-            
+
             # 메타데이터에서 컨텍스트 정보 파싱
             context_info = self.parse_metadata_context(metadata)
-            # 클라이언트에서 선호 모델을 보낸 경우 파악 (auto는 무시)
+
+            # 클라이언트 선호 모델 파악 (auto 무시)
             preferred_from_client = None
             try:
                 raw_meta = json.loads(metadata) if isinstance(metadata, str) else (metadata or {})
@@ -109,9 +131,31 @@ class AIService:
                             preferred_from_client = mk
             except Exception:
                 preferred_from_client = None
-            
+
+            # 상세 요청 로그 (옵션)
+            if settings.DEBUG_HTTP_LOGS:
+                try:
+                    logger.info(
+                        "[AI REQUEST] user_id=%s site_code=%s session_id=%s\nmetadata=%s\nchat_history=%s\nimages=%s",
+                        user_id,
+                        site_code,
+                        session_id,
+                        _trunc(metadata if isinstance(metadata, str) else json.dumps(_mask_keys(metadata or {}), ensure_ascii=False)),
+                        _trunc(json.dumps(chat_history, ensure_ascii=False)),
+                        (len(image_data) if image_data else 0),
+                    )
+                except Exception:
+                    pass
+
             # AI 요청 처리 (컨텍스트 정보 포함)
-            return await self._generate_ai_response(context_info, conversation_context, session_id, image_data, membership_level, preferred_from_client)
+            return await self._generate_ai_response(
+                context_info,
+                conversation_context,
+                session_id,
+                image_data,
+                membership_level,
+                preferred_from_client,
+            )
 
         except Exception as e:
             logger.error(f"AI 응답 생성 실패: {e}")
@@ -143,13 +187,36 @@ class AIService:
                 return f"지원되지 않는 모델입니다: {preferred_model}", None
 
             try:
+                if settings.DEBUG_HTTP_LOGS:
+                    try:
+                        logger.info(
+                            "[AI DISPATCH] session_id=%s model=%s\nsystem_prompt=%s\nuser_input=%s\nimages=%s",
+                            session_id,
+                            preferred_model,
+                            _trunc("You are Bren, a helpful coding assistant. Always respond with JSON matching the required format described in the system prompt."),
+                            _trunc(prompt_text),
+                            (len(image_data) if image_data else 0),
+                        )
+                    except Exception:
+                        pass
                 lc_text, lc_meta = await self.lc_manager.generate_with_meta(
                     model_key=preferred_model,
                     system_prompt="You are Bren, a helpful coding assistant. Always respond with JSON matching the required format described in the system prompt.",
                     user_input=prompt_text,
                     temperature=0.6,
                     images=image_data or None,
+                    structured_schema=AIChangeResponse,
                 )
+                print("######################lc_text, lc_meta:", lc_text, lc_meta)
+                if settings.DEBUG_HTTP_LOGS:
+                    try:
+                        logger.info("[AI RESPONSE] session_id=%s model=%s\nmeta=%s\ntext=%s",
+                                    session_id,
+                                    preferred_model,
+                                    json.dumps(lc_meta or {}, ensure_ascii=False),
+                                    _trunc(lc_text))
+                    except Exception:
+                        pass
             except Exception as lc_err:
                 logger.error(f"LangChain 생성 중 오류: {lc_err}")
                 return "AI 응답 생성에 실패했습니다. 잠시 후 다시 시도해주세요.", None
@@ -165,24 +232,49 @@ class AIService:
             def _extract_token_counts(meta: Dict[str, Any]) -> Tuple[int, int, int]:
                 if not isinstance(meta, dict):
                     return 0, 0, 0
-                # 우선 nested 'usage' 또는 'token_usage'
-                for key in ("usage", "token_usage"):
+                # 우선 nested 'usage', 'token_usage', 'usage_metadata' (Gemini)
+                for key in ("usage", "token_usage", "usage_metadata"):
                     usage = meta.get(key)
                     if isinstance(usage, dict):
-                        inp = usage.get("input_tokens") or usage.get("prompt_tokens") or usage.get("prompt_token_count") or 0
-                        outp = usage.get("output_tokens") or usage.get("completion_tokens") or usage.get("candidates_token_count") or 0
-                        total = usage.get("total_tokens") or usage.get("total_token_count") or (inp + outp)
+                        inp = (
+                            usage.get("input_tokens")
+                            or usage.get("prompt_tokens")
+                            or usage.get("prompt_token_count")
+                            or 0
+                        )
+                        outp = (
+                            usage.get("output_tokens")
+                            or usage.get("completion_tokens")
+                            or usage.get("candidates_token_count")
+                            or 0
+                        )
+                        total = (
+                            usage.get("total_tokens")
+                            or usage.get("total_token_count")
+                            or (inp + outp)
+                        )
                         return int(inp or 0), int(outp or 0), int(total or 0)
                 # Top-level keys (Anthropic 등)
-                inp = meta.get("input_tokens") or meta.get("prompt_tokens") or meta.get("prompt_token_count") or 0
-                outp = meta.get("output_tokens") or meta.get("completion_tokens") or meta.get("candidates_token_count") or 0
+                inp = (
+                    meta.get("input_tokens")
+                    or meta.get("prompt_tokens")
+                    or meta.get("prompt_token_count")
+                    or 0
+                )
+                outp = (
+                    meta.get("output_tokens")
+                    or meta.get("completion_tokens")
+                    or meta.get("candidates_token_count")
+                    or 0
+                )
                 total = meta.get("total_tokens") or meta.get("total_token_count") or (inp + outp)
                 try:
                     return int(inp or 0), int(outp or 0), int(total or 0)
                 except Exception:
                     return 0, 0, 0
-
+            print("######################lc_meta:", lc_meta)
             in_tokens, out_tokens, _ = _extract_token_counts(lc_meta or {})
+            print("######################token:", in_tokens, out_tokens, _)
             input_type = "text_image_video"  # 오디오 미지원 경로이므로 고정
             token_info = TokenUsageCalculator.calculate_cost_from_counts(
                 input_tokens=in_tokens,
@@ -190,7 +282,9 @@ class AIService:
                 model_name=model_used or preferred_model,
                 input_type=input_type,
             )
-            
+
+            print("######################token_info:", token_info)
+
             # JSON 추출 및 파싱 (코드 블록 외부 응답 제거)
             def extract_json_only(response_text):
                 """응답에서 순수한 JSON만 추출 (외부 텍스트 제거)"""
@@ -341,15 +435,33 @@ class AIService:
                 if isinstance(parsed_response, dict):
                     changes = parsed_response.get('changes')
                     if changes and isinstance(changes, dict):
-                        # 유효한 changes 데이터인지 확인
+                        # 유효한 changes 데이터인지 확인 (null 방지)
                         valid_changes = {}
-                        if changes.get('javascript', {}).get('diff'):
-                            valid_changes['javascript'] = {'diff': changes['javascript']['diff']}
-                        if changes.get('css', {}).get('diff'):
-                            valid_changes['css'] = {'diff': changes['css']['diff']}
-                        
+                        js = changes.get('javascript') or {}
+                        css = changes.get('css') or {}
+                        if isinstance(js, dict) and js.get('diff'):
+                            valid_changes['javascript'] = {'diff': js['diff']}
+                        if isinstance(css, dict) and css.get('diff'):
+                            valid_changes['css'] = {'diff': css['diff']}
                         if valid_changes:
                             changes_data = valid_changes
+                    # JSON은 성공했으나 changes가 없을 때, message 내 코드 블록을 추출하여 changes로 변환
+                    if not changes_data:
+                        message_text = None
+                        try:
+                            message_text = parsed_response.get('message') if isinstance(parsed_response, dict) else None
+                        except Exception:
+                            message_text = None
+                        if not message_text:
+                            message_text = structured_response or ''
+                        if message_text:
+                            code_blocks = extract_code_blocks(message_text)
+                            if code_blocks:
+                                changes_data = {}
+                                if code_blocks.get('javascript'):
+                                    changes_data['javascript'] = {'diff': code_blocks['javascript']}
+                                if code_blocks.get('css'):
+                                    changes_data['css'] = {'diff': code_blocks['css']}
             
             # JSON 파싱 실패 시 마크다운 코드 블록에서 changes 형식으로 변환
             except json.JSONDecodeError as e:
@@ -421,6 +533,15 @@ class AIService:
                 response_metadata = {}
             response_metadata['model_used'] = model_used or preferred_model
             response_metadata['fallback_used'] = (model_used is not None and model_used != preferred_model)
+            if settings.DEBUG_HTTP_LOGS:
+                try:
+                    logger.info("[AI PARSED] session_id=%s model=%s\nresponse_text=%s\nmetadata=%s",
+                                session_id,
+                                response_metadata.get('model_used'),
+                                _trunc(response_text),
+                                _trunc(json.dumps(response_metadata, ensure_ascii=False)))
+                except Exception:
+                    pass
             return response_text, response_metadata
             
         except Exception as e:

@@ -56,6 +56,23 @@ class AIScriptResponse(BaseModel):
         None,
         description="스크립트 수정이 필요한 경우의 업데이트 정보"
     )
+
+class CodeDiff(BaseModel):
+    """코드 변경에 대한 diff 페이로드"""
+    diff: str = Field(..., description="코드 변경 diff 또는 전체 코드")
+
+class ChangesPayload(BaseModel):
+    """지원하는 코드 타입별 변경 집합"""
+    javascript: Optional[CodeDiff] = Field(None, description="JavaScript 코드 변경")
+    css: Optional[CodeDiff] = Field(None, description="CSS 코드 변경")
+
+class AIChangeResponse(BaseModel):
+    """현재 채팅 응답에 사용하는 구조화된 출력 스키마"""
+    message: str = Field(..., description="사용자에게 보여줄 응답 메시지")
+    changes: Optional[ChangesPayload] = Field(
+        default=None,
+        description="선택적 코드 변경 사항 (javascript/css)"
+    )
     
 class ScriptValidationError(BaseModel):
     """스크립트 검증 오류를 나타내는 모델"""

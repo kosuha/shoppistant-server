@@ -8,99 +8,14 @@ from typing import Dict, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+from core.model_catalog import get_supported_models as catalog_supported_models, get_pricing_table
 
 class TokenUsageCalculator:
     """토큰 사용량 및 비용 계산기 (멀티 프로바이더)"""
     
     # Gemini 모델별 가격 정보 (per million tokens)
-    MODEL_PRICING = {
-        'gemini-2.5-pro': {
-            'input': {
-                'small_context': 1.25,   # <= 200K tokens
-                'large_context': 2.50    # > 200K tokens
-            },
-            'output': {
-                'small_context': 10.00,  # <= 200K tokens
-                'large_context': 15.00   # > 200K tokens
-            }
-        },
-        'gemini-2.5-flash': {
-            'input': {
-                'text_image_video': 0.30,  # 텍스트/이미지/비디오
-                'audio': 1.00              # 오디오
-            },
-            'output': {
-                'all': 2.50               # 모든 출력
-            }
-        },
-        'gemini-2.5-flash-lite': {
-            'input': {
-                'text_image_video': 0.10,  # 텍스트/이미지/비디오
-                'audio': 0.30              # 오디오
-            },
-            'output': {
-                'all': 0.40               # 모든 출력
-            }
-        },
-        # OpenAI (per million tokens, approximate)
-        'gpt-4o': {
-            'input': {'all': 5.00},
-            'output': {'all': 15.00}
-        },
-        'gpt-4o-mini': {
-            'input': {'all': 0.50},
-            'output': {'all': 1.50}
-        },
-        # OpenAI GPT-5 family (from provided table)
-        'gpt-5': {
-            'input': {'all': 1.25, 'cached': 0.125},
-            'output': {'all': 10.00}
-        },
-        'gpt-5-mini': {
-            'input': {'all': 0.25, 'cached': 0.025},
-            'output': {'all': 2.00}
-        },
-        'gpt-5-nano': {
-            'input': {'all': 0.05, 'cached': 0.005},
-            'output': {'all': 0.40}
-        },
-        # Anthropic (per million tokens)
-        'claude-3-5-sonnet': {
-            'input': {'all': 3.00},
-            'output': {'all': 15.00}
-        },
-        # Claude 4 family (from provided table)
-        'claude-sonnet-4': {
-            'input': {
-                'all': 3.00,              # Base input tokens
-                'cache_write_5m': 3.75,   # 5m Cache Writes
-                'cache_write_1h': 6.00,   # 1h Cache Writes
-                'cache_hit': 0.30,        # Cache Hits & Refreshes
-                'cached': 0.30            # alias for cache hits
-            },
-            'output': {'all': 15.00}
-        },
-        'claude-opus-4': {
-            'input': {
-                'all': 15.00,
-                'cache_write_5m': 18.75,
-                'cache_write_1h': 30.00,
-                'cache_hit': 1.50,
-                'cached': 1.50
-            },
-            'output': {'all': 75.00}
-        },
-        'claude-opus-4.1': {
-            'input': {
-                'all': 15.00,
-                'cache_write_5m': 18.75,
-                'cache_write_1h': 30.00,
-                'cache_hit': 1.50,
-                'cached': 1.50
-            },
-            'output': {'all': 75.00}
-        },
-    }
+    # 단일 카탈로그에서 가격 테이블을 추출하여 사용
+    MODEL_PRICING = get_pricing_table()
     
     
     # USD to KRW 환율 (대략적인 값)
@@ -172,8 +87,10 @@ class TokenUsageCalculator:
         LangChain usage_metadata(input/output/total tokens)에 대응.
         """
         pricing = cls.MODEL_PRICING.get(model_name)
-        if not pricing:
-            # 알 수 없는 모델 -> 비용 0 처리
+        if pricing is None:
+            # 카탈로그에는 있으나 가격표가 없는 경우와 완전히 알 수 없는 모델을 구분
+            supported = model_name in catalog_supported_models()
+            note = 'pricing_not_available' if supported else 'model_unknown'
             return {
                 'model_name': model_name,
                 'total_tokens': (input_tokens or 0) + (output_tokens or 0),
@@ -185,6 +102,7 @@ class TokenUsageCalculator:
                 'total_cost_usd': 0.0,
                 'total_cost_krw': 0.0,
                 'input_type': input_type,
+                'note': note,
             }
 
         # pricing=None 인 경우는 아직 미지원 모델(가격 미정)
@@ -355,8 +273,9 @@ class TokenUsageCalculator:
     
     @classmethod
     def get_supported_models(cls) -> list:
-        """지원되는 모델 목록 반환"""
-        return list(cls.MODEL_PRICING.keys())
+        """지원되는 모델 목록 반환 (단일 소스 참조)"""
+        # 단일 카탈로그에서 계산된 결과 사용
+        return catalog_supported_models()
     
     @classmethod
     def compare_model_costs(cls, input_tokens: int, output_tokens: int, 
