@@ -27,6 +27,13 @@ class MembershipFeatures:
 class MembershipConfig:
     """멤버십 설정 관리자"""
     
+    # 허용 가능한 AI 모델 키 목록 (중앙 관리)
+    ALLOWED_MODELS = {
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+    }
+
     # 멤버십별 설정 정의
     MEMBERSHIP_CONFIGS = {
         MembershipLevel.FREE: MembershipFeatures(
@@ -109,3 +116,15 @@ class MembershipConfig:
     def is_upgrade_available(cls, current_level: int) -> bool:
         """업그레이드 가능 여부 확인"""
         return current_level < max(cls.MEMBERSHIP_CONFIGS.keys())
+
+    @classmethod
+    def is_valid_model(cls, model_key: str) -> bool:
+        """허용된 모델 키인지 검증"""
+        if not isinstance(model_key, str):
+            return False
+        return model_key in cls.ALLOWED_MODELS
+
+    @classmethod
+    def get_allowed_models(cls) -> list:
+        """허용된 모델 키 목록 반환"""
+        return sorted(list(cls.ALLOWED_MODELS))

@@ -106,21 +106,33 @@ class AIService:
             
             # 메타데이터에서 컨텍스트 정보 파싱
             context_info = self.parse_metadata_context(metadata)
+            # 클라이언트에서 선호 모델을 보낸 경우 파악 (auto는 무시)
+            preferred_from_client = None
+            try:
+                raw_meta = json.loads(metadata) if isinstance(metadata, str) else (metadata or {})
+                if isinstance(raw_meta, dict):
+                    m = raw_meta.get('ai_model_preferred')
+                    if isinstance(m, str):
+                        mk = m.strip()
+                        if mk and mk != 'auto' and MembershipConfig.is_valid_model(mk):
+                            preferred_from_client = mk
+            except Exception:
+                preferred_from_client = None
             
             # AI 요청 처리 (컨텍스트 정보 포함)
-            return await self._generate_ai_response(context_info, conversation_context, session_id, image_data, membership_level)
+            return await self._generate_ai_response(context_info, conversation_context, session_id, image_data, membership_level, preferred_from_client)
 
         except Exception as e:
             logger.error(f"AI 응답 생성 실패: {e}")
             return f"AI 응답 생성 실패: {str(e)}", None
 
-    async def _generate_ai_response(self, context_info: Dict[str, Any], conversation_context: str, session_id: str, image_data: Optional[List[str]] = None, membership_level: int = 0) -> Tuple[str, Optional[Dict]]:
+    async def _generate_ai_response(self, context_info: Dict[str, Any], conversation_context: str, session_id: str, image_data: Optional[List[str]] = None, membership_level: int = 0, preferred_from_client: Optional[str] = None) -> Tuple[str, Optional[Dict]]:
         """
         AI 요청 처리 - 직접 Gemini API 호출
         """
         try:
             # 멤버십별 AI 모델 및 설정 가져오기
-            preferred_model = MembershipConfig.get_ai_model(membership_level)
+            preferred_model = preferred_from_client or MembershipConfig.get_ai_model(membership_level)
             thinking_budget = MembershipConfig.get_thinking_budget(membership_level)
             
             
