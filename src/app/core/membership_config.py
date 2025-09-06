@@ -54,7 +54,7 @@ class MembershipConfig:
             ai_model="gemini-2.5-pro",
             thinking_budget=-1,  # 무제한
             daily_requests=-1,  # 무제한
-            max_sites=20,  # 무제한
+            max_sites=-1,  # 무제한
             is_image_uploads=True,  # 이미지 업로드 가능
         )
     }

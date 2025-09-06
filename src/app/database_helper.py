@@ -681,12 +681,13 @@ class DatabaseHelper:
                 if membership.get('expires_at'):
                     expires_at = datetime.fromisoformat(membership['expires_at'].replace('Z', '+00:00'))
                     if expires_at < datetime.now().replace(tzinfo=expires_at.tzinfo):
-                        # 만료된 멤버십은 자동으로 기본 등급으로 다운그레이드
+                        # 만료된 멤버십은 다운그레이드 처리 후, 비회원으로 취급
                         await self._downgrade_expired_membership(user_id)
-                        membership['membership_level'] = 0
-                        membership['expires_at'] = None
-                
+                        return None
+                # 존재하는 멤버십은 항상 MAX로 취급
+                membership['membership_level'] = 3  # MAX
                 return membership
+            # 멤버십 레코드가 없으면 비회원으로 취급
             return None
         except Exception as e:
             logger.error(f"사용자 멤버십 조회 실패: {e}")
@@ -751,7 +752,8 @@ class DatabaseHelper:
         try:
             membership = await self.get_user_membership(user_id)
             if not membership:
-                return required_level <= 0  # 기본 레벨(0)만 허용
+                # 멤버십이 없으면 어떤 레벨도 허용하지 않음
+                return False
             
             current_level = membership.get('membership_level', 0)
             return current_level >= required_level

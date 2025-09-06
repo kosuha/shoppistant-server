@@ -1,21 +1,19 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from services.thread_service import ThreadService
-from services.auth_service import AuthService
-from schemas import ChatMessageUpdate, ChatMessageResponse
+from schemas import ChatMessageUpdate
 from utils.image_validator import ImageValidator
+from core.responses import success_response, error_response
 import logging
-import json
-import asyncio
-from typing import Dict
+from typing import Any
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["threads", "messages"])
 security = HTTPBearer()
 
-# 메시지 상태 변화를 추적하기 위한 전역 저장소
-message_status_subscribers: Dict[str, list] = {}
+"""
+스레드/메시지 라우터
+"""
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """현재 사용자 정보를 가져오는 의존성"""
@@ -28,6 +26,15 @@ def get_thread_service() -> ThreadService:
     return thread_service
 
 
+async def ensure_membership(user=Depends(get_current_user)):
+    """멤버십이 있어야 접근 가능한 엔드포인트에서 사용"""
+    from main import db_helper
+    membership = await db_helper.get_user_membership(user.id)
+    if not membership:
+        raise HTTPException(status_code=403, detail="멤버십 가입 후 이용 가능합니다.")
+    return user
+
+
 @router.get("/threads")
 async def get_threads(
     user=Depends(get_current_user),
@@ -37,66 +44,26 @@ async def get_threads(
     
     try:
         result = await thread_service.get_user_threads(user.id)
-        
         if not result["success"]:
             raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-        
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "data": result["data"],
-            "message": "스레드 목록 조회 성공"
-        })
-        
+        return success_response(data=result["data"], message="스레드 목록 조회 성공")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"스레드 조회 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+        return error_response(message=str(e))
 
 
-@router.patch("/messages/{message_id}/status")
-async def update_message_status(
-    message_id: str,
-    update_data: ChatMessageUpdate,
-    user=Depends(get_current_user),
-    thread_service: ThreadService = Depends(get_thread_service)
-):
-    """메시지 상태를 업데이트하는 API"""
-    try:
-        result = await thread_service.update_message_status(
-            user_id=user.id,
-            message_id=message_id,
-            status=update_data.status,
-            message=update_data.message,
-            metadata=update_data.metadata
-        )
-        
-        if not result["success"]:
-            raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "data": result.get("data"),
-            "message": result.get("message", "메시지 상태가 성공적으로 업데이트되었습니다.")
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"메시지 상태 업데이트 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+"""
+update_message_status 엔드포인트가 파일 내에 중복 정의되어 있어 하나만 유지합니다.
+아래 단일 구현을 사용합니다.
+"""
 
 
-@router.post("/threads")
+@router.post("/threads", status_code=201)
 async def create_thread(
     request: Request,
-    user=Depends(get_current_user),
+    user=Depends(ensure_membership),
     thread_service: ThreadService = Depends(get_thread_service)
 ):
     """새로운 채팅 스레드를 생성하는 API"""
@@ -109,20 +76,13 @@ async def create_thread(
         
         if not result["success"]:
             raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-        
-        return JSONResponse(status_code=201, content={
-            "status": "success",
-            "message": "스레드가 성공적으로 생성되었습니다.",
-            "data": result["data"]
-        })
+        return success_response(data=result["data"], message="스레드가 성공적으로 생성되었습니다.")
         
     except HTTPException:
         raise
     except Exception as e:
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+        logger.error(f"스레드 생성 실패: {e}")
+        return error_response(message=str(e))
 
 
 @router.get("/wallet")
@@ -133,59 +93,19 @@ async def get_wallet(
     try:
         from main import db_helper
         wallet = await db_helper.get_user_wallet(user.id)
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "data": wallet or {"balance_usd": 0, "total_spent_usd": 0},
-            "message": "지갑 조회 성공"
-        })
+        return success_response(data=wallet or {"balance_usd": 0, "total_spent_usd": 0}, message="지갑 조회 성공")
     except Exception as e:
         logger.error(f"지갑 조회 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+        return error_response(message=str(e))
 
 
-@router.patch("/messages/{message_id}/status")
-async def update_message_status(
-    message_id: str,
-    update_data: ChatMessageUpdate,
-    user=Depends(get_current_user),
-    thread_service: ThreadService = Depends(get_thread_service)
-):
-    """메시지 상태를 업데이트하는 API"""
-    try:
-        result = await thread_service.update_message_status(
-            user_id=user.id,
-            message_id=message_id,
-            status=update_data.status,
-            message=update_data.message,
-            metadata=update_data.metadata
-        )
-        
-        if not result["success"]:
-            raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "data": result.get("data"),
-            "message": result.get("message", "메시지 상태가 성공적으로 업데이트되었습니다.")
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"메시지 상태 업데이트 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+ 
 
 
 @router.get("/threads/{thread_id}")
 async def get_thread(
     thread_id: str,
-    user=Depends(get_current_user),
+    user=Depends(ensure_membership),
     thread_service: ThreadService = Depends(get_thread_service)
 ):
     """특정 스레드의 상세 정보를 조회하는 API"""
@@ -195,57 +115,16 @@ async def get_thread(
         
         if not result["success"]:
             raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-        
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "data": result["data"],
-            "message": "스레드 조회 성공"
-        })
+        return success_response(data=result["data"], message="스레드 조회 성공")
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"스레드 조회 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+        return error_response(message=str(e))
 
 
-@router.patch("/messages/{message_id}/status")
-async def update_message_status(
-    message_id: str,
-    update_data: ChatMessageUpdate,
-    user=Depends(get_current_user),
-    thread_service: ThreadService = Depends(get_thread_service)
-):
-    """메시지 상태를 업데이트하는 API"""
-    try:
-        result = await thread_service.update_message_status(
-            user_id=user.id,
-            message_id=message_id,
-            status=update_data.status,
-            message=update_data.message,
-            metadata=update_data.metadata
-        )
-        
-        if not result["success"]:
-            raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "data": result.get("data"),
-            "message": result.get("message", "메시지 상태가 성공적으로 업데이트되었습니다.")
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"메시지 상태 업데이트 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+ 
 
 
 @router.delete("/threads/{thread_id}")
@@ -261,56 +140,16 @@ async def delete_thread(
         
         if not result["success"]:
             raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-        
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "message": result["message"]
-        })
+        return success_response(message=result["message"])
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"스레드 삭제 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+        return error_response(message=str(e))
 
 
-@router.patch("/messages/{message_id}/status")
-async def update_message_status(
-    message_id: str,
-    update_data: ChatMessageUpdate,
-    user=Depends(get_current_user),
-    thread_service: ThreadService = Depends(get_thread_service)
-):
-    """메시지 상태를 업데이트하는 API"""
-    try:
-        result = await thread_service.update_message_status(
-            user_id=user.id,
-            message_id=message_id,
-            status=update_data.status,
-            message=update_data.message,
-            metadata=update_data.metadata
-        )
-        
-        if not result["success"]:
-            raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "data": result.get("data"),
-            "message": result.get("message", "메시지 상태가 성공적으로 업데이트되었습니다.")
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"메시지 상태 업데이트 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+ 
 
 
 @router.put("/threads/{thread_id}/title")
@@ -330,57 +169,16 @@ async def update_thread_title(
         
         if not result["success"]:
             raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-        
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "data": result["data"],
-            "message": result["message"]
-        })
+        return success_response(data=result["data"], message=result["message"])
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"스레드 제목 업데이트 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+        return error_response(message=str(e))
 
 
-@router.patch("/messages/{message_id}/status")
-async def update_message_status(
-    message_id: str,
-    update_data: ChatMessageUpdate,
-    user=Depends(get_current_user),
-    thread_service: ThreadService = Depends(get_thread_service)
-):
-    """메시지 상태를 업데이트하는 API"""
-    try:
-        result = await thread_service.update_message_status(
-            user_id=user.id,
-            message_id=message_id,
-            status=update_data.status,
-            message=update_data.message,
-            metadata=update_data.metadata
-        )
-        
-        if not result["success"]:
-            raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "data": result.get("data"),
-            "message": result.get("message", "메시지 상태가 성공적으로 업데이트되었습니다.")
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"메시지 상태 업데이트 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+ 
 
 
 # 메시지 관련 엔드포인트들
@@ -397,21 +195,13 @@ async def get_messages(
         
         if not result["success"]:
             raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-        
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "data": result["data"],
-            "message": "메시지 목록 조회 성공"
-        })
+        return success_response(data=result["data"], message="메시지 목록 조회 성공")
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"메시지 조회 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+        return error_response(message=str(e))
 
 
 @router.patch("/messages/{message_id}/status")
@@ -433,27 +223,18 @@ async def update_message_status(
         
         if not result["success"]:
             raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "data": result.get("data"),
-            "message": result.get("message", "메시지 상태가 성공적으로 업데이트되었습니다.")
-        })
+        return success_response(data=result.get("data"), message=result.get("message", "메시지 상태가 성공적으로 업데이트되었습니다."))
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"메시지 상태 업데이트 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+        return error_response(message=str(e))
 
-
-@router.post("/messages")
+@router.post("/messages", status_code=201)
 async def create_message(
     request: Request,
-    user=Depends(get_current_user),
+    user=Depends(ensure_membership),
     thread_service: ThreadService = Depends(get_thread_service)
 ):
     """새로운 메시지를 생성하는 API"""
@@ -475,53 +256,13 @@ async def create_message(
         
         if not result["success"]:
             raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-
-        return JSONResponse(status_code=201, content={
-            "status": "success",
-            "data": result["data"],
-            "message": result["message"]
-        })
+        return success_response(data=result["data"], message=result["message"]) 
         
     except HTTPException:
         raise
     except Exception as e:
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+        logger.error(f"메시지 생성 실패: {e}")
+        return error_response(message=str(e))
 
 
-@router.patch("/messages/{message_id}/status")
-async def update_message_status(
-    message_id: str,
-    update_data: ChatMessageUpdate,
-    user=Depends(get_current_user),
-    thread_service: ThreadService = Depends(get_thread_service)
-):
-    """메시지 상태를 업데이트하는 API"""
-    try:
-        result = await thread_service.update_message_status(
-            user_id=user.id,
-            message_id=message_id,
-            status=update_data.status,
-            message=update_data.message,
-            metadata=update_data.metadata
-        )
-        
-        if not result["success"]:
-            raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
-
-        return JSONResponse(status_code=200, content={
-            "status": "success",
-            "data": result.get("data"),
-            "message": result.get("message", "메시지 상태가 성공적으로 업데이트되었습니다.")
-        })
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"메시지 상태 업데이트 실패: {e}")
-        return JSONResponse(status_code=500, content={
-            "status": "error",
-            "message": str(e)
-        })
+# 파일 내 단일 구현만 유지

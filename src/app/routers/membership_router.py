@@ -234,16 +234,17 @@ async def check_membership_permission(
     try:
         if not current_user:
             raise HTTPException(status_code=401, detail="인증이 필요합니다")
-        
-        if required_level < 0 or required_level > 2:
+
+        # 유효 레벨은 0~3 (MAX=3)
+        if required_level < 0 or required_level > 3:
             return error_response(
-                message="유효하지 않은 멤버십 레벨입니다 (0-2)",
+                message="유효하지 않은 멤버십 레벨입니다 (0-3)",
                 error_code="INVALID_MEMBERSHIP_LEVEL"
             )
-        
+
         user_id = current_user.id
         has_permission = await membership_service.check_permission(user_id, required_level)
-        
+
         return success_response(
             data={
                 "user_id": user_id,
@@ -252,7 +253,7 @@ async def check_membership_permission(
             },
             message="권한 확인 완료"
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -311,7 +312,9 @@ async def get_membership_config(
         
         # 멤버십 정보 조회
         membership = await db_helper.get_user_membership(current_user.id)
-        membership_level = membership.get('membership_level', 0) if membership else 0
+        if not membership:
+            return error_response(message="멤버십 가입 후 이용 가능합니다.", error_code="NO_MEMBERSHIP")
+        membership_level = membership.get('membership_level', 0)
         
         # 멤버십 설정 정보 가져오기
         membership_info = MembershipConfig.get_membership_info(membership_level)
@@ -359,7 +362,9 @@ async def check_feature_access(
         from main import db_helper
         
         membership = await db_helper.get_user_membership(current_user.id)
-        membership_level = membership.get('membership_level', 0) if membership else 0
+        if not membership:
+            return error_response(message="멤버십 가입 후 이용 가능합니다.", error_code="NO_MEMBERSHIP")
+        membership_level = membership.get('membership_level', 0)
         
         # 기능 접근 권한 확인
         has_access = MembershipConfig.can_use_feature(membership_level, feature_name)
@@ -403,7 +408,9 @@ async def get_membership_limits(
         from main import db_helper
         
         membership = await db_helper.get_user_membership(current_user.id)
-        membership_level = membership.get('membership_level', 0) if membership else 0
+        if not membership:
+            return error_response(message="멤버십 가입 후 이용 가능합니다.", error_code="NO_MEMBERSHIP")
+        membership_level = membership.get('membership_level', 0)
         
         features = MembershipConfig.get_features(membership_level)
         

@@ -1,27 +1,55 @@
 import json
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from services.script_service import ScriptService
 from database_helper import DatabaseHelper
 from services.ai_service import AIService
 from core.membership_config import MembershipConfig
 from core.token_calculator import TokenUsageCalculator
+from core.interfaces import IMembershipService
 
 logger = logging.getLogger(__name__)
 
 
 class ThreadService:
-    def __init__(self, db_helper: DatabaseHelper, ai_service: AIService, script_service: ScriptService):
+    """채팅 스레드/메시지 도메인 서비스
+
+    책임 분리:
+    - 스레드 관리(create/get/delete/update)
+    - 메시지 생성 및 상태 변경
+    - AI 호출 및 비용 정산(헬퍼 메서드로 분리)
+    """
+
+    def __init__(
+        self,
+        db_helper: DatabaseHelper,
+        ai_service: AIService,
+        script_service: ScriptService,
+        membership_service: Optional[IMembershipService] = None,
+    ):
         self.db_helper = db_helper
         self.ai_service = ai_service
         self.script_service = script_service
+        self.membership_service = membership_service
     
     async def _check_membership_limits(self, user_id: str, action: str, **kwargs) -> Dict[str, Any]:
-        """멤버십 제한사항 확인"""
+        """멤버십 제한사항 확인
+
+        Returns { allowed: bool, membership_level?: int, features?: Any, error?: str, status_code?: int }
+        """
         try:
-            # 사용자 멤버십 정보 조회
-            membership = await self.db_helper.get_user_membership(user_id)
-            membership_level = membership.get('membership_level', 0) if membership else 0
+            # 사용자 멤버십 정보 조회 (서비스 우선, 실패 시 DB 직접 조회)
+            membership = None
+            if self.membership_service:
+                try:
+                    membership = await self.membership_service.get_user_membership(user_id)  # type: ignore[attr-defined]
+                except Exception as e:
+                    logger.warning(f"멤버십 서비스 조회 실패, DB 직접 조회 시도: {e}")
+            if not membership:
+                membership = await self.db_helper.get_user_membership(user_id)
+            if not membership:
+                return {"allowed": False, "error": "멤버십 가입 후 이용 가능합니다.", "status_code": 403}
+            membership_level = membership.get('membership_level', 0)
             
             features = MembershipConfig.get_features(membership_level)
             
@@ -51,8 +79,49 @@ class ThreadService:
             
         except Exception as e:
             logger.error(f"멤버십 제한 확인 실패: {e}")
-            # 에러 시 기본 등급으로 처리
-            return {"allowed": True, "membership_level": 0}
+            # 에러 시 접근 거부 (안전 기본값)
+            return {"allowed": False, "error": "멤버십 확인 중 오류가 발생했습니다.", "status_code": 500}
+
+    async def _validate_wallet_min_balance(self, user_id: str, min_required: float = 0.005) -> Optional[str]:
+        """지갑 최소 잔액 확인. 부족하면 에러 메시지 반환, 충분하면 None 반환"""
+        try:
+            wallet = await self.db_helper.get_user_wallet(user_id)
+            current_balance = (wallet or {}).get('balance_usd', 0)
+            if current_balance < min_required:
+                return "크레딧이 부족합니다. 충전 후 다시 시도해주세요."
+        except Exception as e:
+            logger.debug(f"지갑 조회 실패(무시): {e}")
+        return None
+
+    def _unpack_ai_result(self, ai_result: Any) -> Tuple[str, Optional[dict]]:
+        """AI 결과를 (response, metadata) 튜플로 변환"""
+        if ai_result is None:
+            raise ValueError("AI 서비스에서 None을 반환했습니다.")
+        if isinstance(ai_result, tuple) and len(ai_result) == 2:
+            ai_response, ai_metadata = ai_result
+            return str(ai_response), ai_metadata if isinstance(ai_metadata, dict) else None
+        raise ValueError(f"AI 서비스에서 예상치 못한 형태의 응답을 받았습니다: {type(ai_result)}")
+
+    async def _maybe_deploy_script(self, user_id: str, site_code: str, ai_metadata: Optional[dict], auto_deploy: bool) -> None:
+        """AI 메타데이터에 스크립트 변경이 있고 auto_deploy인 경우 배포"""
+        if not (ai_metadata and auto_deploy):
+            return
+        script_dict = ai_metadata.get("script_updates", {}).get("script", {}) if isinstance(ai_metadata, dict) else {}
+        if script_dict:
+            script_content = script_dict.get("content", "")
+            result = await self.script_service.deploy_site_scripts(user_id, site_code, {"script": script_content})
+            if not result.get("success"):
+                raise ValueError(f"스크립트 자동 배포 실패: {result.get('error')}")
+
+    def _serialize_metadata(self, ai_metadata: Optional[dict]) -> Optional[str]:
+        """메타데이터를 JSON 문자열로 직렬화(실패 시 None)"""
+        if not ai_metadata:
+            return None
+        try:
+            return json.dumps(ai_metadata, ensure_ascii=False)
+        except (TypeError, ValueError) as json_error:
+            logger.warning(f"AI 메타데이터 직렬화 실패: {json_error}")
+            return None
 
     async def create_thread(self, user_id: str, site_code: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -248,7 +317,17 @@ class ThreadService:
             logger.error(f"메시지 조회 실패: {e}")
             return {"success": False, "error": str(e), "status_code": 500}
 
-    async def create_message(self, user_id: str, site_code: str, thread_id: str, message: str, message_type: str = "user", metadata: Optional[str] = None, auto_deploy: bool = False, image_data: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def create_message(
+        self,
+        user_id: str,
+        site_code: str,
+        thread_id: str,
+        message: str,
+        message_type: str = "user",
+        metadata: Optional[str] = None,
+        auto_deploy: bool = False,
+        image_data: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """
         새로운 메시지를 생성합니다.
         사용자가 메시지를 보내면 자동으로 AI 응답을 생성하여 저장합니다.
@@ -323,15 +402,9 @@ class ThreadService:
             if message_type == "user":
                 try:
                     # 사전 잔액 확인 (최소 예상 비용의 보수적 하한 검사)
-                    try:
-                        wallet = await self.db_helper.get_user_wallet(user_id)
-                        current_balance = (wallet or {}).get('balance_usd', 0)
-                        # 아주 작은 최소금액(예: $0.005) 없으면 안내
-                        min_required = 0.005
-                        if current_balance < min_required:
-                            return {"success": False, "error": "크레딧이 부족합니다. 충전 후 다시 시도해주세요.", "status_code": 402}
-                    except Exception:
-                        pass
+                    msg = await self._validate_wallet_min_balance(user_id)
+                    if msg:
+                        return {"success": False, "error": msg, "status_code": 402}
                     # 먼저 pending 상태의 AI 메시지 생성
                     ai_message = await self.db_helper.create_message(
                         requesting_user_id=user_id,
@@ -357,34 +430,16 @@ class ThreadService:
                     chat_history = await self.db_helper.get_thread_messages(user_id, thread_id)
 
                     # AI 응답 생성 (메타데이터 및 사이트 코드, 이미지 데이터 포함)
-                    ai_response_result = await self.ai_service.generate_gemini_response(chat_history, user_id, metadata, site_code, image_data)
+                    ai_response_result = await self.ai_service.generate_gemini_response(
+                        chat_history, user_id, metadata, site_code, image_data
+                    )
 
-                    # AI 응답 결과 검증 및 언패킹
-                    if ai_response_result is None:
-                        raise ValueError("AI 서비스에서 None을 반환했습니다.")
-                    if isinstance(ai_response_result, tuple) and len(ai_response_result) == 2:
-                        ai_response, ai_metadata = ai_response_result
-                    else:
-                        raise ValueError(f"AI 서비스에서 예상치 못한 형태의 응답을 받았습니다: {type(ai_response_result)}")
-                    
-                    if ai_metadata and auto_deploy:
-                        if not isinstance(ai_metadata, dict):
-                            raise TypeError(f"AI 메타데이터는 dict 타입이어야 합니다. 현재 타입: {type(ai_metadata)}")
-                        script_dict = ai_metadata.get("script_updates", {}).get("script", {})
-                        if script_dict:
-                            script_content = script_dict.get("content", "")
-                            result = await self.script_service.deploy_site_scripts(user_id, site_code, {"script": script_content})
-                            if not result["success"]:
-                                raise ValueError(f"스크립트 자동 배포 실패: {result['error']}")
+                    # AI 응답 결과 언패킹 및 필요 시 자동 배포
+                    ai_response, ai_metadata = self._unpack_ai_result(ai_response_result)
+                    await self._maybe_deploy_script(user_id, site_code, ai_metadata, auto_deploy)
 
                     # AI 메타데이터를 JSON 문자열로 변환
-                    ai_metadata_json = None
-                    if ai_metadata:
-                        try:
-                            ai_metadata_json = json.dumps(ai_metadata, ensure_ascii=False)
-                        except (TypeError, ValueError) as json_error:
-                            logger.warning(f"AI 메타데이터 직렬화 실패: {json_error}")
-                            ai_metadata_json = None
+                    ai_metadata_json = self._serialize_metadata(ai_metadata)
                     
                     # AI 응답 완료 - 메시지 업데이트 (비용 및 모델 정보 포함)
                     if ai_message:

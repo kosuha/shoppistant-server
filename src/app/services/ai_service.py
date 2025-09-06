@@ -1,5 +1,6 @@
 import uuid
 import base64
+import asyncio
 from google import genai
 from google.genai import types
 from typing import List, Dict, Any, Tuple, Optional
@@ -19,6 +20,23 @@ class AIService:
         self.gemini_client = gemini_client
         self.db_helper = db_helper
         
+    def _is_transient_error(self, e: Exception) -> bool:
+        """일시적(재시도 가능) 오류 여부를 판별합니다."""
+        msg = str(e).lower()
+        return any(k in msg for k in [
+            "503", "unavailable", "overloaded", "rate limit", "temporar"
+        ])
+
+    def _get_model_candidates(self, preferred: str) -> list:
+        """선호 모델에서 시작하는 폴백 체인을 생성합니다."""
+        chain = []
+        if preferred:
+            chain.append(preferred)
+        for m in ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]:
+            if m not in chain:
+                chain.append(m)
+        return chain
+
 
     def parse_metadata_context(self, metadata: str) -> Dict[str, Any]:
         """
@@ -67,7 +85,9 @@ class AIService:
         try:
             # 사용자 멤버십 정보 조회
             membership = await self.db_helper.get_user_membership(user_id)
-            membership_level = membership.get('membership_level', 0) if membership else 0
+            if not membership:
+                return ("멤버십 가입 후 이용 가능합니다.", None)
+            membership_level = membership.get('membership_level', 0)
             
             # 세션 ID 생성
             session_id = str(uuid.uuid4())
@@ -99,7 +119,7 @@ class AIService:
         """
         try:
             # 멤버십별 AI 모델 및 설정 가져오기
-            ai_model = MembershipConfig.get_ai_model(membership_level)
+            preferred_model = MembershipConfig.get_ai_model(membership_level)
             thinking_budget = MembershipConfig.get_thinking_budget(membership_level)
             
             
@@ -162,22 +182,47 @@ class AIService:
             # 멤버십에 따른 thinking 설정
             thinking_config_params = {"thinking_budget": thinking_budget} if thinking_budget != -1 else {"thinking_budget": -1}
             
-            response = await self.gemini_client.aio.models.generate_content(
-                model=ai_model,
-                contents=contents,
-                config=genai.types.GenerateContentConfig(
-                    temperature=0.6,
-                    thinking_config=types.ThinkingConfig(**thinking_config_params)
-                )
-            )
+            # 모델 과부하 대응: 재시도 + 모델 폴백
+            model_used = None
+            response = None
+            last_err = None
+            for idx, model in enumerate(self._get_model_candidates(preferred_model)):
+                max_attempts = 3 if idx == 0 else 2
+                for attempt in range(max_attempts):
+                    try:
+                        response = await self.gemini_client.aio.models.generate_content(
+                            model=model,
+                            contents=contents,
+                            config=genai.types.GenerateContentConfig(
+                                temperature=0.6,
+                                thinking_config=types.ThinkingConfig(**thinking_config_params)
+                            )
+                        )
+                        model_used = model
+                        break
+                    except Exception as gen_err:
+                        last_err = gen_err
+                        if self._is_transient_error(gen_err) and attempt < max_attempts - 1:
+                            await asyncio.sleep(min(2.0, 0.5 * (2 ** attempt)))
+                            continue
+                        else:
+                            break
+                if model_used:
+                    break
+
+            if not model_used:
+                if last_err and self._is_transient_error(last_err):
+                    raise Exception("모델이 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.")
+                else:
+                    raise last_err or Exception("AI 응답 생성 실패")
 
             # 토큰 사용량 및 비용 계산
             token_info = None
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                 # 멤버십에 따른 모델명으로 비용 계산
                 token_info = TokenUsageCalculator.calculate_cost(
-                    response.usage_metadata, 
-                    model_name=ai_model,
+                    response.usage_metadata,
+                    model_name=(model_used or preferred_model),
                     input_type="text_image_video"  # 기본값, 오디오 처리 시 변경 가능
                 )
             
@@ -419,8 +464,15 @@ class AIService:
                     response_metadata = {}
                 response_metadata['changes'] = changes_data
             
+            # 사용된 모델 및 폴백 여부를 메타데이터에 포함
+            if not response_metadata:
+                response_metadata = {}
+            response_metadata['model_used'] = model_used or preferred_model
+            response_metadata['fallback_used'] = (model_used is not None and model_used != preferred_model)
             return response_text, response_metadata
             
         except Exception as e:
             logger.error(f"AI 응답 생성 실패: {e}")
+            if self._is_transient_error(e):
+                return "현재 AI 모델이 과부하입니다. 잠시 후 다시 시도해주세요.", None
             return f"AI 응답 생성 실패: 관리자에게 문의하세요.", None
