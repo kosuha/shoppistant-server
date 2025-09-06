@@ -1,9 +1,6 @@
 import uuid
-import base64
 import asyncio
-from google import genai
-from google.genai import types
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Any as TypingAny
 import json
 import logging
 from database_helper import DatabaseHelper
@@ -11,14 +8,16 @@ from schemas import AIScriptResponse
 from core.membership_config import MembershipConfig
 from core.token_calculator import TokenUsageCalculator
 from prompts.bren_assistant_prompt import get_english_prompt
+from services.llm_providers.langchain_manager import LangChainLLMManager
 
 logger = logging.getLogger(__name__)
 
 
 class AIService:
-    def __init__(self, gemini_client: genai.Client, db_helper: DatabaseHelper):
+    def __init__(self, gemini_client: TypingAny, db_helper: DatabaseHelper, lc_manager: Optional[LangChainLLMManager] = None):
         self.gemini_client = gemini_client
         self.db_helper = db_helper
+        self.lc_manager = lc_manager
         
     def _is_transient_error(self, e: Exception) -> bool:
         """일시적(재시도 가능) 오류 여부를 판별합니다."""
@@ -27,15 +26,7 @@ class AIService:
             "503", "unavailable", "overloaded", "rate limit", "temporar"
         ])
 
-    def _get_model_candidates(self, preferred: str) -> list:
-        """선호 모델에서 시작하는 폴백 체인을 생성합니다."""
-        chain = []
-        if preferred:
-            chain.append(preferred)
-        for m in ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]:
-            if m not in chain:
-                chain.append(m)
-        return chain
+    # Gemini 폴백 체인은 더 이상 사용하지 않습니다 (LangChain 전용 경로)
 
 
     def parse_metadata_context(self, metadata: str) -> Dict[str, Any]:
@@ -128,129 +119,77 @@ class AIService:
 
     async def _generate_ai_response(self, context_info: Dict[str, Any], conversation_context: str, session_id: str, image_data: Optional[List[str]] = None, membership_level: int = 0, preferred_from_client: Optional[str] = None) -> Tuple[str, Optional[Dict]]:
         """
-        AI 요청 처리 - 직접 Gemini API 호출
+        AI 요청 처리 - LangChain만 사용 (실패 시 폴백 없음)
         """
         try:
             # 멤버십별 AI 모델 및 설정 가져오기
             preferred_model = preferred_from_client or MembershipConfig.get_ai_model(membership_level)
             thinking_budget = MembershipConfig.get_thinking_budget(membership_level)
             
-            
-            # 이미지 데이터 처리
-            image_parts = []
-            if image_data:
-                for i, img_data in enumerate(image_data):
-                    try:
-                        
-                        # 데이터 형식 검증
-                        if not img_data or not isinstance(img_data, str):
-                            continue
-                        
-                        # 실제 데이터 내용 확인 (디버깅용)
-                        
-                        # data:image/jpeg;base64, 형식 확인
-                        if not img_data.startswith('data:image/'):
-                            continue
-                        
-                        if ',' not in img_data:
-                            continue
-                        
-                        # 헤더와 데이터 분리
-                        parts = img_data.split(',', 1)
-                        if len(parts) != 2:
-                            continue
-                        
-                        header, base64_data = parts
-                        
-                        # MIME 타입 추출
-                        try:
-                            mime_type = header.split(':')[1].split(';')[0]
-                        except (IndexError, AttributeError):
-                            continue
-                        
-                        # Base64 디코딩
-                        try:
-                            image_bytes = base64.b64decode(base64_data)
-                        except Exception:
-                            continue
-                        
-                        # Gemini API용 Part 생성
-                        image_parts.append(types.Part.from_bytes(
-                            data=image_bytes,
-                            mime_type=mime_type
-                        ))
-                        
-                    except Exception as e:
-                        logger.error(f"이미지 {i+1} 처리 중 예외 발생: {e}")
-                        continue
-            
             # 프롬프트 텍스트 가져오기 (컨텍스트 정보를 직접 전달)
             prompt_text = get_english_prompt(context_info, conversation_context, image_data, session_id)
             
-            # contents 구성 (텍스트 + 이미지)
-            contents = [prompt_text]
-            if image_parts:
-                contents.extend(image_parts)
-            
-            # 멤버십에 따른 thinking 설정
-            thinking_config_params = {"thinking_budget": thinking_budget} if thinking_budget != -1 else {"thinking_budget": -1}
-            
-            # 모델 과부하 대응: 재시도 + 모델 폴백
+            # 멤버십에 따른 thinking 설정은 현재 LangChain 경로에서 직접 사용하지 않습니다.
+
+            # LangChain 경로만 사용: 실패/미지원 시 에러 반환
+            structured_response: Optional[str] = None
             model_used = None
-            response = None
-            last_err = None
-            for idx, model in enumerate(self._get_model_candidates(preferred_model)):
-                max_attempts = 3 if idx == 0 else 2
-                for attempt in range(max_attempts):
-                    try:
-                        response = await self.gemini_client.aio.models.generate_content(
-                            model=model,
-                            contents=contents,
-                            config=genai.types.GenerateContentConfig(
-                                temperature=0.6,
-                                thinking_config=types.ThinkingConfig(**thinking_config_params)
-                            )
-                        )
-                        model_used = model
-                        break
-                    except Exception as gen_err:
-                        last_err = gen_err
-                        if self._is_transient_error(gen_err) and attempt < max_attempts - 1:
-                            await asyncio.sleep(min(2.0, 0.5 * (2 ** attempt)))
-                            continue
-                        else:
-                            break
-                if model_used:
-                    break
+            if not self.lc_manager:
+                logger.error("LangChain 매니저가 초기화되지 않았습니다.")
+                return "서버 설정 오류로 모델을 사용할 수 없습니다. 관리자에게 문의하세요.", None
 
-            if not model_used:
-                if last_err and self._is_transient_error(last_err):
-                    raise Exception("모델이 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.")
-                else:
-                    raise last_err or Exception("AI 응답 생성 실패")
+            if not (preferred_model and self.lc_manager.is_supported(preferred_model)):
+                logger.error(f"지원되지 않는 모델 요청: {preferred_model}")
+                return f"지원되지 않는 모델입니다: {preferred_model}", None
 
-            # 토큰 사용량 및 비용 계산
-            token_info = None
-            if hasattr(response, 'usage_metadata') and response.usage_metadata:
-                # 멤버십에 따른 모델명으로 비용 계산
-                token_info = TokenUsageCalculator.calculate_cost(
-                    response.usage_metadata,
-                    model_name=(model_used or preferred_model),
-                    input_type="text_image_video"  # 기본값, 오디오 처리 시 변경 가능
+            try:
+                lc_text, lc_meta = await self.lc_manager.generate_with_meta(
+                    model_key=preferred_model,
+                    system_prompt="You are Bren, a helpful coding assistant. Always respond with JSON matching the required format described in the system prompt.",
+                    user_input=prompt_text,
+                    temperature=0.6,
+                    images=image_data or None,
                 )
-            
-            # 응답에서 텍스트 추출 (디버깅 로그 추가)
-            structured_response = ""
-            
-            if hasattr(response, 'text') and response.text:
-                structured_response = response.text
-            elif hasattr(response, 'candidates') and response.candidates:
-                candidate = response.candidates[0]
-                if hasattr(candidate, 'content') and candidate.content:
-                    if hasattr(candidate.content, 'parts') and candidate.content.parts:
-                        for i, part in enumerate(candidate.content.parts):
-                            if hasattr(part, 'text') and part.text:
-                                structured_response += part.text
+            except Exception as lc_err:
+                logger.error(f"LangChain 생성 중 오류: {lc_err}")
+                return "AI 응답 생성에 실패했습니다. 잠시 후 다시 시도해주세요.", None
+
+            if lc_text and isinstance(lc_text, str) and lc_text.strip():
+                structured_response = lc_text
+                model_used = preferred_model
+            else:
+                logger.error("LangChain이 유효한 응답을 반환하지 않았습니다.")
+                return "AI 응답 생성에 실패했습니다. 잠시 후 다시 시도해주세요.", None
+
+            # LangChain 메타데이터에서 토큰 사용량 추출 및 비용 계산
+            def _extract_token_counts(meta: Dict[str, Any]) -> Tuple[int, int, int]:
+                if not isinstance(meta, dict):
+                    return 0, 0, 0
+                # 우선 nested 'usage' 또는 'token_usage'
+                for key in ("usage", "token_usage"):
+                    usage = meta.get(key)
+                    if isinstance(usage, dict):
+                        inp = usage.get("input_tokens") or usage.get("prompt_tokens") or usage.get("prompt_token_count") or 0
+                        outp = usage.get("output_tokens") or usage.get("completion_tokens") or usage.get("candidates_token_count") or 0
+                        total = usage.get("total_tokens") or usage.get("total_token_count") or (inp + outp)
+                        return int(inp or 0), int(outp or 0), int(total or 0)
+                # Top-level keys (Anthropic 등)
+                inp = meta.get("input_tokens") or meta.get("prompt_tokens") or meta.get("prompt_token_count") or 0
+                outp = meta.get("output_tokens") or meta.get("completion_tokens") or meta.get("candidates_token_count") or 0
+                total = meta.get("total_tokens") or meta.get("total_token_count") or (inp + outp)
+                try:
+                    return int(inp or 0), int(outp or 0), int(total or 0)
+                except Exception:
+                    return 0, 0, 0
+
+            in_tokens, out_tokens, _ = _extract_token_counts(lc_meta or {})
+            input_type = "text_image_video"  # 오디오 미지원 경로이므로 고정
+            token_info = TokenUsageCalculator.calculate_cost_from_counts(
+                input_tokens=in_tokens,
+                output_tokens=out_tokens,
+                model_name=model_used or preferred_model,
+                input_type=input_type,
+            )
             
             # JSON 추출 및 파싱 (코드 블록 외부 응답 제거)
             def extract_json_only(response_text):

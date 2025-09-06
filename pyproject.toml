@@ -18,4 +18,9 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "beautifulsoup4>=4.13.4",
     "pillow>=11.3.0",
+    "langchain>=0.2.15",
+    "langchain-core>=0.2.38",
+    "langchain-openai>=0.2.2",
+    "langchain-anthropic>=0.2.1",
+    "langchain-google-genai>=2.0.6",
 ]

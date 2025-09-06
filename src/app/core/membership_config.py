@@ -32,6 +32,15 @@ class MembershipConfig:
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
+    # LangChain 경유 추가 모델들 (환경변수 없으면 자동 폴백)
+    # OpenAI
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    # Anthropic
+    "claude-sonnet-4",
+    "claude-opus-4",
+    "claude-opus-4.1",
     }
 
     # 멤버십별 설정 정의

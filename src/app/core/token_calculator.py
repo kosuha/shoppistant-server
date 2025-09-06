@@ -1,5 +1,8 @@
 """
-Gemini API 토큰 사용량 및 비용 계산기
+멀티 프로바이더 토큰 사용량 및 비용 계산기
+ - Gemini(기존)
+ - OpenAI (gpt-4o, gpt-4o-mini)
+ - Anthropic (claude-3-5-sonnet)
 """
 from typing import Dict, Any, Optional
 import logging
@@ -7,7 +10,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 class TokenUsageCalculator:
-    """Gemini API 토큰 사용량 및 비용 계산기"""
+    """토큰 사용량 및 비용 계산기 (멀티 프로바이더)"""
     
     # Gemini 모델별 가격 정보 (per million tokens)
     MODEL_PRICING = {
@@ -38,8 +41,67 @@ class TokenUsageCalculator:
             'output': {
                 'all': 0.40               # 모든 출력
             }
-        }
+        },
+        # OpenAI (per million tokens, approximate)
+        'gpt-4o': {
+            'input': {'all': 5.00},
+            'output': {'all': 15.00}
+        },
+        'gpt-4o-mini': {
+            'input': {'all': 0.50},
+            'output': {'all': 1.50}
+        },
+        # OpenAI GPT-5 family (from provided table)
+        'gpt-5': {
+            'input': {'all': 1.25, 'cached': 0.125},
+            'output': {'all': 10.00}
+        },
+        'gpt-5-mini': {
+            'input': {'all': 0.25, 'cached': 0.025},
+            'output': {'all': 2.00}
+        },
+        'gpt-5-nano': {
+            'input': {'all': 0.05, 'cached': 0.005},
+            'output': {'all': 0.40}
+        },
+        # Anthropic (per million tokens)
+        'claude-3-5-sonnet': {
+            'input': {'all': 3.00},
+            'output': {'all': 15.00}
+        },
+        # Claude 4 family (from provided table)
+        'claude-sonnet-4': {
+            'input': {
+                'all': 3.00,              # Base input tokens
+                'cache_write_5m': 3.75,   # 5m Cache Writes
+                'cache_write_1h': 6.00,   # 1h Cache Writes
+                'cache_hit': 0.30,        # Cache Hits & Refreshes
+                'cached': 0.30            # alias for cache hits
+            },
+            'output': {'all': 15.00}
+        },
+        'claude-opus-4': {
+            'input': {
+                'all': 15.00,
+                'cache_write_5m': 18.75,
+                'cache_write_1h': 30.00,
+                'cache_hit': 1.50,
+                'cached': 1.50
+            },
+            'output': {'all': 75.00}
+        },
+        'claude-opus-4.1': {
+            'input': {
+                'all': 15.00,
+                'cache_write_5m': 18.75,
+                'cache_write_1h': 30.00,
+                'cache_hit': 1.50,
+                'cached': 1.50
+            },
+            'output': {'all': 75.00}
+        },
     }
+    
     
     # USD to KRW 환율 (대략적인 값)
     USD_TO_KRW_RATE = 1350
@@ -48,7 +110,7 @@ class TokenUsageCalculator:
     def calculate_cost(cls, usage_metadata, model_name: str = "gemini-2.5-pro", 
                       input_type: str = "text_image_video") -> Dict[str, Any]:
         """
-        토큰 사용량을 기반으로 비용을 계산합니다.
+    Gemini 전용 usage_metadata 객체를 기반으로 비용을 계산합니다.
         
         Args:
             usage_metadata: Gemini API에서 반환된 usage_metadata
@@ -96,6 +158,93 @@ class TokenUsageCalculator:
             'total_cost_krw': round(total_cost_krw, 2),
             'input_type': input_type
         }
+
+    @classmethod
+    def calculate_cost_from_counts(
+        cls,
+        input_tokens: int,
+        output_tokens: int,
+        model_name: str,
+        input_type: str = "text_image_video",
+    ) -> Dict[str, Any]:
+        """
+        프로바이더에 상관없이 토큰 카운트(입력/출력)를 기반으로 비용 계산.
+        LangChain usage_metadata(input/output/total tokens)에 대응.
+        """
+        pricing = cls.MODEL_PRICING.get(model_name)
+        if not pricing:
+            # 알 수 없는 모델 -> 비용 0 처리
+            return {
+                'model_name': model_name,
+                'total_tokens': (input_tokens or 0) + (output_tokens or 0),
+                'input_tokens': input_tokens or 0,
+                'output_tokens': output_tokens or 0,
+                'thoughts_tokens': 0,
+                'input_cost_usd': 0.0,
+                'output_cost_usd': 0.0,
+                'total_cost_usd': 0.0,
+                'total_cost_krw': 0.0,
+                'input_type': input_type,
+            }
+
+        # pricing=None 인 경우는 아직 미지원 모델(가격 미정)
+        if pricing is None:
+            return {
+                'model_name': model_name,
+                'total_tokens': (input_tokens or 0) + (output_tokens or 0),
+                'input_tokens': input_tokens or 0,
+                'output_tokens': output_tokens or 0,
+                'thoughts_tokens': 0,
+                'input_cost_usd': 0.0,
+                'output_cost_usd': 0.0,
+                'total_cost_usd': 0.0,
+                'total_cost_krw': 0.0,
+                'input_type': input_type,
+                'note': 'pricing_not_available',
+            }
+
+        # 입력 비용
+        # 우선: 입력 타입이 명시적 키로 제공되면 그대로 사용 (예: cache_write_5m / cache_hit 등)
+        if input_type in pricing['input']:
+            in_price = pricing['input'][input_type]
+        elif input_type == 'cached' and 'cached' in pricing['input']:
+            in_price = pricing['input']['cached']
+        elif 'all' in pricing['input']:
+            in_price = pricing['input']['all']
+        elif model_name.startswith('gemini-2.5'):
+            # Gemini 규칙 재사용
+            in_price = pricing['input'].get('audio' if input_type == 'audio' else 'text_image_video', 0)
+        else:
+            in_price = 0
+
+        # 출력 비용
+        if 'all' in pricing['output']:
+            out_price = pricing['output']['all']
+        elif model_name == 'gemini-2.5-pro':
+            # 컨텍스트 크기에 따른 차등 (입력 기준)
+            context_threshold = 200000
+            is_large_context = (input_tokens or 0) > context_threshold
+            out_price = pricing['output']['large_context' if is_large_context else 'small_context']
+        else:
+            out_price = 0
+
+        input_cost_usd = ((input_tokens or 0) * in_price) / 1_000_000
+        output_cost_usd = ((output_tokens or 0) * out_price) / 1_000_000
+        total_cost_usd = input_cost_usd + output_cost_usd
+        total_cost_krw = total_cost_usd * cls.USD_TO_KRW_RATE
+
+        return {
+            'model_name': model_name,
+            'total_tokens': (input_tokens or 0) + (output_tokens or 0),
+            'input_tokens': input_tokens or 0,
+            'output_tokens': output_tokens or 0,
+            'thoughts_tokens': 0,
+            'input_cost_usd': round(input_cost_usd, 6),
+            'output_cost_usd': round(output_cost_usd, 6),
+            'total_cost_usd': round(total_cost_usd, 6),
+            'total_cost_krw': round(total_cost_krw, 2),
+            'input_type': input_type,
+        }
     
     @classmethod
     def _calculate_input_cost(cls, input_tokens: int, pricing: Dict, model_name: str, input_type: str) -> float:
@@ -113,11 +262,17 @@ class TokenUsageCalculator:
             else:
                 price = pricing['input']['small_context']
         else:
-            # Flash, Flash-Lite 모델은 입력 타입에 따른 요금
-            if input_type == 'audio':
-                price = pricing['input'].get('audio', pricing['input']['text_image_video'])
+            # 공통 규칙: 'cached' 가 있으면 우선, 다음으로 'all', 없으면 text/audio 분기
+            if input_type == 'cached' and 'cached' in pricing['input']:
+                price = pricing['input']['cached']
+            elif 'all' in pricing['input']:
+                price = pricing['input']['all']
             else:
-                price = pricing['input']['text_image_video']
+                # Flash, Flash-Lite 모델은 입력 타입에 따른 요금
+                if input_type == 'audio':
+                    price = pricing['input'].get('audio', pricing['input'].get('text_image_video', 0))
+                else:
+                    price = pricing['input'].get('text_image_video', 0)
         
         return (input_tokens * price) / 1_000_000
     

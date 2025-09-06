@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     
     # AI 설정
     GEMINI_API_KEY: str
+    # 선택적: 다양한 LLM 공급자 지원을 위한 키들 (있으면 사용)
+    OPENAI_API_KEY: Optional[str] = None
+    ANTHROPIC_API_KEY: Optional[str] = None
     
     # 보안 설정
     SECRET_KEY: str = "your-secret-key"
