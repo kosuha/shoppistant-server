@@ -684,8 +684,7 @@ class DatabaseHelper:
                         # 만료된 멤버십은 다운그레이드 처리 후, 비회원으로 취급
                         await self._downgrade_expired_membership(user_id)
                         return None
-                # 존재하는 멤버십은 항상 MAX로 취급
-                membership['membership_level'] = 3  # MAX
+                # 저장된 멤버십 레벨을 그대로 반환
                 return membership
             # 멤버십 레코드가 없으면 비회원으로 취급
             return None

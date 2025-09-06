@@ -14,6 +14,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     return await auth_service.verify_auth(credentials)
 
 
+async def ensure_membership(user=Depends(get_current_user)):
+    """구독 멤버십 보유 사용자만 접근 허용"""
+    from main import db_helper
+    membership = await db_helper.get_user_membership(user.id)
+    if not membership:
+        raise HTTPException(status_code=403, detail="구독 후 이용 가능한 기능입니다.")
+    return user
+
+
 @router.get("/", response_model=None)
 @router.get("", response_model=None)
 async def get_site_scripts(site_code: str, user=Depends(get_current_user)):
@@ -43,7 +52,7 @@ async def get_site_scripts(site_code: str, user=Depends(get_current_user)):
 
 
 @router.post("/deploy")
-async def deploy_site_scripts(site_code: str, request: Request, user=Depends(get_current_user)):
+async def deploy_site_scripts(site_code: str, request: Request, user=Depends(ensure_membership)):
     """특정 사이트에 스크립트를 배포하는 API"""
     from main import script_service
     

@@ -30,14 +30,15 @@ async def ensure_membership(user=Depends(get_current_user)):
     """멤버십이 있어야 접근 가능한 엔드포인트에서 사용"""
     from main import db_helper
     membership = await db_helper.get_user_membership(user.id)
-    if not membership:
-        raise HTTPException(status_code=403, detail="멤버십 가입 후 이용 가능합니다.")
+    # membership_level > 0 이어야 구독 사용자로 간주
+    if not membership or int(membership.get('membership_level', 0)) <= 0:
+        raise HTTPException(status_code=403, detail="구독 후 이용 가능한 기능입니다.")
     return user
 
 
 @router.get("/threads")
 async def get_threads(
-    user=Depends(get_current_user),
+    user=Depends(ensure_membership),
     thread_service: ThreadService = Depends(get_thread_service)
 ):
     """사용자의 모든 스레드 목록을 조회하는 API"""
@@ -130,7 +131,7 @@ async def get_thread(
 @router.delete("/threads/{thread_id}")
 async def delete_thread(
     thread_id: str,
-    user=Depends(get_current_user),
+    user=Depends(ensure_membership),
     thread_service: ThreadService = Depends(get_thread_service)
 ):
     """특정 스레드를 삭제하는 API"""
@@ -156,7 +157,7 @@ async def delete_thread(
 async def update_thread_title(
     thread_id: str,
     request: Request,
-    user=Depends(get_current_user),
+    user=Depends(ensure_membership),
     thread_service: ThreadService = Depends(get_thread_service)
 ):
     """스레드 제목을 업데이트하는 API"""
@@ -185,7 +186,7 @@ async def update_thread_title(
 @router.get("/messages/{thread_id}")
 async def get_messages(
     thread_id: str,
-    user=Depends(get_current_user),
+    user=Depends(ensure_membership),
     thread_service: ThreadService = Depends(get_thread_service)
 ):
     """특정 스레드의 모든 메시지를 조회하는 API"""
@@ -208,7 +209,7 @@ async def get_messages(
 async def update_message_status(
     message_id: str,
     update_data: ChatMessageUpdate,
-    user=Depends(get_current_user),
+    user=Depends(ensure_membership),
     thread_service: ThreadService = Depends(get_thread_service)
 ):
     """메시지 상태를 업데이트하는 API"""

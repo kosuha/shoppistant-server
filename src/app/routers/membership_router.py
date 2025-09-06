@@ -312,8 +312,8 @@ async def get_membership_config(
         
         # 멤버십 정보 조회
         membership = await db_helper.get_user_membership(current_user.id)
-        if not membership:
-            return error_response(message="멤버십 가입 후 이용 가능합니다.", error_code="NO_MEMBERSHIP")
+        if not membership or int(membership.get('membership_level', 0)) <= 0:
+            return error_response(message="구독 후 이용 가능한 기능입니다.", error_code="NO_SUBSCRIPTION")
         membership_level = membership.get('membership_level', 0)
         
         # 멤버십 설정 정보 가져오기
@@ -362,8 +362,8 @@ async def check_feature_access(
         from main import db_helper
         
         membership = await db_helper.get_user_membership(current_user.id)
-        if not membership:
-            return error_response(message="멤버십 가입 후 이용 가능합니다.", error_code="NO_MEMBERSHIP")
+        if not membership or int(membership.get('membership_level', 0)) <= 0:
+            return error_response(message="구독 후 이용 가능한 기능입니다.", error_code="NO_SUBSCRIPTION")
         membership_level = membership.get('membership_level', 0)
         
         # 기능 접근 권한 확인
@@ -408,8 +408,8 @@ async def get_membership_limits(
         from main import db_helper
         
         membership = await db_helper.get_user_membership(current_user.id)
-        if not membership:
-            return error_response(message="멤버십 가입 후 이용 가능합니다.", error_code="NO_MEMBERSHIP")
+        if not membership or int(membership.get('membership_level', 0)) <= 0:
+            return error_response(message="구독 후 이용 가능한 기능입니다.", error_code="NO_SUBSCRIPTION")
         membership_level = membership.get('membership_level', 0)
         
         features = MembershipConfig.get_features(membership_level)

@@ -15,6 +15,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     return await auth_service.verify_auth(credentials)
 
 
+async def ensure_membership(user=Depends(get_current_user)):
+    """구독 멤버십 보유 사용자만 접근 허용"""
+    from main import db_helper
+    membership = await db_helper.get_user_membership(user.id)
+    if not membership or int(membership.get('membership_level', 0)) <= 0:
+        raise HTTPException(status_code=403, detail="구독 후 이용 가능한 기능입니다.")
+    return user
+
+
 def _get_admin_client():
     from main import supabase_admin
     if not supabase_admin:
@@ -38,7 +47,7 @@ def _resolve_user_site(client, user_id: str, identifier: str) -> Dict[str, Any]:
 
 
 @router.get("/{site_code}/versions")
-async def list_versions(site_code: str, user=Depends(get_current_user)):
+async def list_versions(site_code: str, user=Depends(ensure_membership)):
     """지정 사이트의 모든 버전 목록 (created_at ASC)
     site_code에는 실제 site_code 또는 도메인(primary_domain) 둘 다 허용
     """
@@ -64,7 +73,7 @@ async def list_versions(site_code: str, user=Depends(get_current_user)):
 
 
 @router.get("/{site_code}/versions/head")
-async def get_head(site_code: str, user=Depends(get_current_user)):
+async def get_head(site_code: str, user=Depends(ensure_membership)):
     """최신 버전 1건 반환 (없으면 null)
     site_code에는 실제 site_code 또는 도메인(primary_domain) 둘 다 허용
     """
@@ -91,7 +100,7 @@ async def get_head(site_code: str, user=Depends(get_current_user)):
 
 
 @router.post("/{site_code}/versions")
-async def create_version(site_code: str, request: Request, user=Depends(get_current_user)):
+async def create_version(site_code: str, request: Request, user=Depends(ensure_membership)):
     """스냅샷/패치 저장 API
     요청 바디 예시:
     - snapshot: { "type":"snapshot", "js_code":"...", "css_code":"...", "patch_count_from_snapshot":0, "message_id":"...", "change_summary":"..." }

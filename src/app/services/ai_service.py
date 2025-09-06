@@ -85,8 +85,9 @@ class AIService:
         try:
             # 사용자 멤버십 정보 조회
             membership = await self.db_helper.get_user_membership(user_id)
-            if not membership:
-                return ("멤버십 가입 후 이용 가능합니다.", None)
+            # 멤버십이 없거나 무료(0)인 경우 사용 불가
+            if not membership or int(membership.get('membership_level', 0)) <= 0:
+                return ("구독 후 이용 가능한 기능입니다.", None)
             membership_level = membership.get('membership_level', 0)
             
             # 세션 ID 생성

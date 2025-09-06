@@ -31,23 +31,6 @@ class MembershipService(BaseService, IMembershipService):
             membership = await self.db_helper.get_user_membership(user_id)
             
             if not membership:
-                # 멤버십이 없으면 기본 멤버십 생성 시도
-                membership = await self.db_helper.create_user_membership(user_id, MembershipLevel.BASIC)
-                if not membership:
-                    # 멤버십 생성 실패 시 기본값 반환
-                    self.logger.warning(f"멤버십 생성 실패, 기본값 반환: user_id={user_id}")
-                    return {
-                        'id': str(uuid.uuid4()),
-                        'user_id': user_id,
-                        'membership_level': MembershipLevel.BASIC,
-                        'expires_at': None,
-                        'created_at': None,
-                        'updated_at': None,
-                        'is_expired': False,
-                        'days_remaining': None
-                    }
-            
-            if not membership:
                 return None
                 
             # 응답 데이터 가공
