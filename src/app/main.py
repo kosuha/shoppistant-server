@@ -30,6 +30,7 @@ from database_helper import DatabaseHelper
 
 # Routers Import
 from routers import auth_router, site_router, script_router, thread_router, sse_router, membership_router
+from routers import paddle_router
 from routers import version_router
 
 # 로깅 설정
@@ -229,6 +230,7 @@ app.include_router(thread_router.router)
 app.include_router(sse_router.router)  # 실시간 메시지 상태 스트리밍
 app.include_router(membership_router.router)  # 멤버십 관리 라우터
 app.include_router(version_router.router)  # 버전 관리 라우터
+app.include_router(paddle_router.router)  # Paddle 웹훅 라우터
 
 if __name__ == "__main__":
     # 메인 스레드에서만 신호 핸들러 등록
