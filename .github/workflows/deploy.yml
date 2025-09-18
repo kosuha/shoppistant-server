@@ -157,10 +157,16 @@ jobs:
           echo "SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}" >> .env
           echo "SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" >> .env
           echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
+          echo "CLAUDE_API_KEY=${{ secrets.CLAUDE_API_KEY }}" >> .env
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY
           echo "WEB_BASE_URL=${{ secrets.WEB_BASE_URL }}" >> .env
           echo "GITHUB_REPOSITORY=${{ github.repository }}" >> .env
-          echo "MCP_SERVER_URL=http://imweb-mcp-server:8001" >> .env
           echo "SERVER_BASE_URL=${{ secrets.SERVER_BASE_URL }}" >> .env
+          echo "PADDLE_WEBHOOK_SECRET=${{ secrets.PADDLE_WEBHOOK_SECRET }}" >> .env
+          echo "PADDLE_WEBHOOK_STRICT_VERIFY=${{ secrets.PADDLE_WEBHOOK_STRICT_VERIFY }}" >> .env
+          echo "PADDLE_PRICE_ID_MEMBERSHIP=${{ secrets.PADDLE_PRICE_ID_MEMBERSHIP }}" >> .env
+          echo "PADDLE_PRICE_ID_CREDITS=${{ secrets.PADDLE_PRICE_ID_CREDITS }}" >> .env
+          echo "CREDITS_UNIT_PRICE_USD=${{ secrets.CREDITS_UNIT_PRICE_USD }}" >> .env
           
           # 전체 스택 재시작 (의존성 때문에)
           echo "Restarting all services..."
