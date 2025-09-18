@@ -2,19 +2,20 @@
 Paddle Webhook Router
 
 Handles Paddle Billing webhook events:
-- optional signature verification using public key
+- optional signature verification using webhook secret (Billing, HMAC-SHA256)
 - membership activation/extension
 - wallet credit top-up for AI credits
 """
 import json
 import os
-import base64
 import logging
+import hmac
+import hashlib
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Request, Header, HTTPException
 
-from core.responses import success_response, error_response
+from core.responses import success_response
 
 logger = logging.getLogger(__name__)
 
@@ -22,36 +23,47 @@ router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks", "paddle"])
 
 
 def _verify_signature(raw: bytes, signature: Optional[str]) -> bool:
-    """Verify Paddle-Signature if configured.
+    """Verify Paddle-Signature if configured (Billing HMAC-SHA256)."""
 
-    If PADDLE_WEBHOOK_PUBLIC_KEY is not set, returns True (non-strict).
-    If PADDLE_WEBHOOK_STRICT_VERIFY=true, failures return False.
-    """
     strict = os.getenv("PADDLE_WEBHOOK_STRICT_VERIFY", "false").lower() == "true"
-    public_key = os.getenv("PADDLE_WEBHOOK_PUBLIC_KEY", "").strip()
-    if not public_key:
+    secret = os.getenv("PADDLE_WEBHOOK_SECRET", "").strip()
+
+    if not secret:
         if strict:
-            logger.warning("[PADDLE] strict verify enabled but no public key configured")
+            logger.warning("[PADDLE] strict verify enabled but no webhook secret configured")
             return False
         return True
+
     if not signature:
         logger.warning("[PADDLE] missing Paddle-Signature header")
         return not strict
 
     try:
-        # Best-effort RSA-SHA256 verification (depends on cryptography library)
-        from cryptography.hazmat.primitives import serialization, hashes
-        from cryptography.hazmat.primitives.asymmetric import padding
+        parts: Dict[str, str] = {}
+        for chunk in signature.split(";"):
+            chunk = chunk.strip()
+            if not chunk or "=" not in chunk:
+                continue
+            k, v = chunk.split("=", 1)
+            parts[k.strip()] = v.strip()
 
-        pub = serialization.load_pem_public_key(public_key.encode("utf-8"))
-        sig = base64.b64decode(signature)
-        pub.verify(sig, raw, padding.PKCS1v15(), hashes.SHA256())
-        return True
-    except ImportError:
-        logger.warning("[PADDLE] cryptography not installed; skipping signature verification")
-        return not strict
+        ts = parts.get("ts")
+        provided = parts.get("h1") or parts.get("sig") or parts.get("signature")
+        if not ts or not provided:
+            logger.warning("[PADDLE] signature header missing ts/h1 component")
+            return not strict
+
+        # Compute expected signature: HMAC_SHA256(secret, f"{ts}:{raw}")
+        payload = ts.encode("utf-8") + b":" + raw
+        expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
+        if hmac.compare_digest(expected, provided):
+            return True
+
+        logger.error("[PADDLE] signature mismatch")
+        return False if strict else True
     except Exception as e:
-        logger.error(f"[PADDLE] signature verification failed: {e}")
+        logger.error(f"[PADDLE] signature verification error: {e}")
         return False if strict else True
 
 

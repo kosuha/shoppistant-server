@@ -597,7 +597,7 @@ class DatabaseHelper:
                     
 #                     if is_free_user:
 #                         # Free 사용자용 태그 스크립트
-#                         website_base_url = os.getenv("IMWEB_BASE_URL", "/")  # 실제 ImWeb URL로 변경
+#                         website_base_url = os.getenv("WEB_BASE_URL", "/")  # 실제 ImWeb URL로 변경
 #                         free_tag_script = f"""
 
 # var siteToppingLink = document.createElement('a');

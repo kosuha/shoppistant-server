@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
     
     # Imweb API 설정
-    IMWEB_BASE_URL: str
+    WEB_BASE_URL: str
     
     # AI 설정
     GEMINI_API_KEY: str
