@@ -266,7 +266,6 @@ class DatabaseHelper:
     async def log_system_event(self, user_id: str = None, event_type: str = 'info', 
                              event_data: Dict = None, ip_address: str = None, 
                              user_agent: str = None) -> bool:
-        return True
         """시스템 이벤트 로그 기록"""
         try:
             log_data = {
@@ -281,6 +280,46 @@ class DatabaseHelper:
             return len(result.data) > 0
         except Exception as e:
             logger.error(f"시스템 로그 기록 실패: {e}")
+            return False
+
+    async def has_processed_webhook_event(self, provider: str, event_id: str) -> bool:
+        """지정한 공급자 웹훅 이벤트가 이미 처리되었는지 확인"""
+        try:
+            if not event_id:
+                return False
+
+            event_type = f"{provider}_webhook"
+            client = self._get_client(use_admin=True)
+            result = (
+                client.table('system_logs')
+                .select('id')
+                .eq('event_type', event_type)
+                .contains('event_data', {'event_id': event_id})
+                .limit(1)
+                .execute()
+            )
+            return bool(result.data)
+        except Exception as e:
+            logger.error(f"웹훅 이벤트 중복 확인 실패: {e}")
+            return False
+
+    async def record_webhook_event(self, provider: str, event_id: str, status: str, payload: Dict[str, Any] = None) -> bool:
+        """웹훅 이벤트 처리 기록"""
+        try:
+            if not event_id:
+                return False
+
+            event_type = f"{provider}_webhook"
+            event_payload = {
+                'event_id': event_id,
+                'status': status,
+            }
+            if payload:
+                event_payload['payload'] = payload
+
+            return await self.log_system_event(event_type=event_type, event_data=event_payload)
+        except Exception as e:
+            logger.error(f"웹훅 이벤트 기록 실패: {e}")
             return False
     
     # 유틸리티 함수들
@@ -692,14 +731,20 @@ class DatabaseHelper:
             logger.error(f"사용자 멤버십 조회 실패: {e}")
             return None
 
-    async def create_user_membership(self, user_id: str, membership_level: int = 0, 
-                                   expires_at: datetime = None) -> Dict[str, Any]:
+    async def create_user_membership(
+        self,
+        user_id: str,
+        membership_level: int = 0,
+        expires_at: datetime = None,
+        next_billing_at: datetime = None,
+    ) -> Dict[str, Any]:
         """새로운 사용자 멤버십 생성"""
         try:
             membership_data = {
                 'user_id': user_id,
                 'membership_level': membership_level,
-                'expires_at': expires_at.isoformat() if expires_at else None
+                'expires_at': expires_at.isoformat() if expires_at else None,
+                'next_billing_at': next_billing_at.isoformat() if next_billing_at else None,
             }
             
             client = self._get_client(use_admin=True)
@@ -712,13 +757,19 @@ class DatabaseHelper:
             logger.error(f"사용자 멤버십 생성 실패: {e}")
             return {}
 
-    async def update_user_membership(self, user_id: str, membership_level: int, 
-                                   expires_at: datetime = None) -> bool:
+    async def update_user_membership(
+        self,
+        user_id: str,
+        membership_level: int,
+        expires_at: datetime = None,
+        next_billing_at: datetime = None,
+    ) -> bool:
         """사용자 멤버십 업데이트"""
         try:
             update_data = {
                 'membership_level': membership_level,
                 'expires_at': expires_at.isoformat() if expires_at else None,
+                'next_billing_at': next_billing_at.isoformat() if next_billing_at else None,
                 'updated_at': datetime.now().isoformat()
             }
             
@@ -740,7 +791,7 @@ class DatabaseHelper:
             membership = await self.get_user_membership(user_id)
             if not membership:
                 # 기본 멤버십 생성
-                membership = await self.create_user_membership(user_id, 0, None)
+                membership = await self.create_user_membership(user_id, 0, None, None)
             return membership
         except Exception as e:
             logger.error(f"사용자 멤버십 확인/생성 실패: {e}")
@@ -778,6 +829,7 @@ class DatabaseHelper:
             update_data = {
                 'membership_level': 0,
                 'expires_at': None,
+                'next_billing_at': None,
                 'updated_at': datetime.now().isoformat()
             }
             
@@ -889,10 +941,33 @@ class DatabaseHelper:
             logger.error(f"지갑 조회 실패: {e}")
             return None
 
-    async def credit_wallet(self, user_id: str, amount_usd: float, metadata: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+    async def credit_wallet(
+        self,
+        user_id: str,
+        amount_usd: float,
+        metadata: Dict[str, Any] = None,
+        source_event_id: str | None = None,
+    ) -> Optional[Dict[str, Any]]:
         """지갑 충전 및 거래 기록"""
         try:
             client = self._get_client(use_admin=True)
+            metadata = dict(metadata or {})
+
+            if source_event_id:
+                metadata.setdefault('source', 'paddle')
+                metadata['event_id'] = source_event_id
+
+                existing = (
+                    client.table('token_transactions')
+                    .select('id')
+                    .eq('user_id', user_id)
+                    .eq('type', 'credit')
+                    .contains('metadata', {'event_id': source_event_id})
+                    .limit(1)
+                    .execute()
+                )
+                if existing.data:
+                    return None
             # credit via RPC to bypass RLS
             rpc_res = client.rpc('wallet_credit', { 'p_user_id': user_id, 'p_amount': amount_usd }).execute()
             new_balance = rpc_res.data if hasattr(rpc_res, 'data') else None
@@ -902,7 +977,7 @@ class DatabaseHelper:
                 'type': 'credit',
                 'amount_usd': amount_usd,
                 'balance_after': new_balance,
-                'metadata': (metadata or {})
+                'metadata': metadata
             }).execute()
             return tx.data[0] if tx.data else {'balance_after': new_balance}
         except Exception as e:

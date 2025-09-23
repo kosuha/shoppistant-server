@@ -5,13 +5,16 @@ Handles Paddle Billing webhook events:
 - optional signature verification using webhook secret (Billing, HMAC-SHA256)
 - membership activation/extension
 - wallet credit top-up for AI credits
+- idempotency tracking via system_logs to avoid duplicate processing
 """
 import json
 import os
 import logging
 import hmac
 import hashlib
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request, Header, HTTPException
 
@@ -25,7 +28,7 @@ router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks", "paddle"])
 def _verify_signature(raw: bytes, signature: Optional[str]) -> bool:
     """Verify Paddle-Signature if configured (Billing HMAC-SHA256)."""
 
-    strict = os.getenv("PADDLE_WEBHOOK_STRICT_VERIFY", "false").lower() == "true"
+    strict = os.getenv("PADDLE_WEBHOOK_STRICT_VERIFY", "true").lower() == "true"
     secret = os.getenv("PADDLE_WEBHOOK_SECRET", "").strip()
 
     if not secret:
@@ -76,6 +79,56 @@ def _get(d: Dict, *keys: str, default=None):
     return cur
 
 
+def _to_decimal(value: Any) -> Optional[Decimal]:
+    try:
+        if value is None:
+            return None
+        if isinstance(value, (int, float, Decimal)):
+            return Decimal(str(value))
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def _extract_amount(value: Any) -> Any:
+    if isinstance(value, dict):
+        if 'amount' in value:
+            return value['amount']
+        if 'value' in value:
+            return value['value']
+    return value
+
+
+def _parse_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            if raw.endswith('Z'):
+                raw = raw[:-1] + '+00:00'
+            dt = datetime.fromisoformat(raw)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            return None
+    return None
+
+
 @router.get("/paddle")
 async def paddle_webhook_get():
     return success_response(data={"ok": True}, message="paddle webhook alive")
@@ -110,46 +163,176 @@ async def paddle_webhook(
     uid = custom.get("uid") or custom.get("user_id") or custom.get("userId")
     email = _get(data, "customer", "email") or _get(data, "customer_email")
     items: List[Dict[str, Any]] = data.get("items") or []
+    event_id: Optional[str] = (
+        payload.get("event_id")
+        or payload.get("eventId")
+        or payload.get("notification_id")
+        or _get(payload, "meta", "event_id")
+    )
+    if not event_id:
+        logger.warning("[PADDLE] webhook payload missing event_id; idempotency limited")
+    transaction_id: Optional[str] = (
+        _get(data, "id")
+        or payload.get("id")
+        or _get(payload, "object", "id")
+    )
+    currency: Optional[str] = (
+        _get(data, "currency_code")
+        or _get(data, "currency")
+        or _get(data, "details", "currency")
+        or _get(payload, "currency")
+    )
+    if currency:
+        currency = currency.upper()
+
+    next_billing_raw = (
+        _get(data, "subscription", "next_billed_at")
+        or _get(data, "subscription", "next_billing_at")
+        or _get(data, "subscription", "next_billing_date")
+        or _get(data, "subscription", "billing_period", "next_billed_at")
+        or _get(data, "subscription", "billing_period", "next_billing_at")
+        or _get(data, "billing_period", "next_billing_at")
+        or _get(data, "billing_period", "next_payment_date")
+        or _get(data, "next_payment", "date")
+        or _get(data, "next_payment_date")
+    )
+    next_billing_at = _parse_datetime(next_billing_raw)
 
     if not items:
         # Some Paddle events wrap the transaction under "object" or similar
         items = _get(data, "object", "items", default=[]) or _get(payload, "object", "items", default=[])
 
-    logger.info("[PADDLE] event=%s uid=%s email=%s items=%s", event_type, uid, bool(email), len(items))
+    logger.info(
+        "[PADDLE] event=%s uid=%s email=%s items=%s event_id=%s tx_id=%s",
+        event_type,
+        uid,
+        bool(email),
+        len(items),
+        event_id,
+        transaction_id,
+    )
 
     # Only act on completed/paid events
     et = (event_type or "").lower()
     if not ("completed" in et or "paid" in et or "succeeded" in et):
         return success_response(data={"skipped": True}, message="event ignored")
 
+    try:
+        from app.main import membership_service as membership_service  # type: ignore
+        from app.main import db_helper as db_helper  # type: ignore
+    except Exception:
+        membership_service = None
+        db_helper = None
+
+    if event_id and db_helper:
+        already_processed = await db_helper.has_processed_webhook_event("paddle", event_id)
+        if already_processed:
+            logger.info("[PADDLE] duplicate event ignored: %s", event_id)
+            return success_response(data={"duplicate": True}, message="event already processed")
+
     # Resolve env configuration
     price_membership = os.getenv("PADDLE_PRICE_ID_MEMBERSHIP", "")
     price_credits = os.getenv("PADDLE_PRICE_ID_CREDITS", "")
-    credits_unit_price = float(os.getenv("CREDITS_UNIT_PRICE_USD", "1.4"))
+    try:
+        credits_unit_price = Decimal(os.getenv("CREDITS_UNIT_PRICE_USD", "1.4"))
+    except (InvalidOperation, TypeError):
+        credits_unit_price = Decimal("0")
 
     # Dispatch items
     membership_count = 0
-    credits_units = 0
+    credit_quantity = 0
+    credit_amount_usd = Decimal("0")
+    credit_amount_inferred = False
+    credit_currency_mismatch = False
 
     for it in items:
         # Try multiple shapes for price id
         price_id = _get(it, "price", "id") or it.get("price_id") or it.get("priceId")
-        qty = int(it.get("quantity") or 1)
+        qty_raw = it.get("quantity") or 1
+        try:
+            qty = max(0, int(qty_raw))
+        except (TypeError, ValueError):
+            qty = 0
+
         if price_membership and price_id == price_membership:
             membership_count += qty
-        elif price_credits and price_id == price_credits:
-            credits_units += max(0, qty)
+            continue
 
-    # No mapped items, just ACK
-    if membership_count == 0 and credits_units == 0:
+        if price_credits and price_id == price_credits:
+            credit_quantity += qty
+
+            item_currency = (
+                _get(it, "price", "currency_code")
+                or _get(it, "price", "currency")
+                or currency
+                or "USD"
+            )
+            item_currency = item_currency.upper()
+
+            totals = it.get("totals") or {}
+            raw_total = (
+                _extract_amount(totals.get("total"))
+                or _extract_amount(totals.get("grand_total"))
+                or _extract_amount(totals.get("gross"))
+                or _extract_amount(totals.get("amount"))
+                or _extract_amount(it.get("totals"))
+                or _extract_amount(it.get("total"))
+            )
+
+            if raw_total is None:
+                unit_price_obj = _get(it, "price", "unit_price") or {}
+                raw_unit = _extract_amount(unit_price_obj)
+                if raw_unit is None:
+                    raw_unit = _extract_amount(_get(it, "price", "unit_amount"))
+                unit_dec = _to_decimal(raw_unit)
+                if unit_dec is not None:
+                    raw_total = unit_dec * qty
+
+            amount_dec = None
+            raw_total_dec = _to_decimal(raw_total)
+            if raw_total_dec is not None:
+                if item_currency == "USD":
+                    amount_dec = (raw_total_dec / Decimal(100)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                else:
+                    credit_currency_mismatch = True
+                    logger.error(
+                        "[PADDLE] unsupported currency for credits: %s (event %s)",
+                        item_currency,
+                        event_id,
+                    )
+
+            if amount_dec is None and qty > 0:
+                if credits_unit_price > 0:
+                    amount_dec = (credits_unit_price * Decimal(qty)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    credit_amount_inferred = True
+                else:
+                    amount_dec = Decimal("0")
+
+            if amount_dec is not None:
+                credit_amount_usd += amount_dec
+
+    if credit_amount_inferred:
+        logger.warning(
+            "[PADDLE] credit amount inferred from unit price configuration for event %s",
+            event_id,
+        )
+
+    if credit_currency_mismatch:
+        logger.error(
+            "[PADDLE] credit processing blocked due to unsupported currency (event %s)",
+            event_id,
+        )
+
+    # No mapped items, just ACK (and record event for idempotency)
+    if membership_count == 0 and credit_quantity == 0:
+        if event_id and db_helper:
+            await db_helper.record_webhook_event(
+                "paddle",
+                event_id,
+                "acknowledged",
+                {"reason": "no mapped items"},
+            )
         return success_response(data={"ok": True}, message="no mapped items; acknowledged")
-
-    # Execute business actions
-    try:
-        from app.main import membership_service, db_helper  # type: ignore
-    except Exception:
-        membership_service = None
-        db_helper = None
 
     # Identify user
     user_id = uid
@@ -157,7 +340,7 @@ async def paddle_webhook(
         # Optional: resolve user by email via Supabase admin (skipped here)
         logger.warning("[PADDLE] uid missing; email resolution not implemented")
 
-    results = {}
+    results: Dict[str, Any] = {}
     # Membership activation/extension: assume 30 days per unit
     if membership_count > 0 and membership_service and user_id:
         try:
@@ -165,22 +348,73 @@ async def paddle_webhook(
                 user_id=user_id,
                 target_level=1,
                 duration_days=30 * membership_count,
+                next_billing_at=next_billing_at,
             )
-            results["membership"] = res or True
+            res_data = res if isinstance(res, dict) else {}
+            results["membership"] = {
+                "success": bool(res_data),
+                "data": res_data,
+            }
         except Exception as e:
             logger.error(f"[PADDLE] membership update failed: {e}")
-            results["membership"] = False
+            results["membership"] = {"success": False}
+    elif membership_count > 0 and not user_id:
+        results["membership"] = {"success": False, "reason": "missing_user"}
+    elif membership_count > 0 and not membership_service:
+        results["membership"] = {"success": False, "reason": "service_unavailable"}
 
     # Credits top-up: credit wallet with USD equivalent
-    if credits_units > 0 and db_helper and user_id:
-        try:
-            amount_usd = credits_units * credits_unit_price
-            tx = await db_helper.credit_wallet(user_id, amount_usd)  # type: ignore
-            results["credits_usd"] = amount_usd
-            results["tx"] = bool(tx)
-        except Exception as e:
-            logger.error(f"[PADDLE] wallet credit failed: {e}")
-            results["credits_usd"] = 0
-            results["tx"] = False
+    if credit_quantity > 0:
+        credit_result: Dict[str, Any] = {
+            "quantity": credit_quantity,
+            "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
+            "inferred": credit_amount_inferred,
+            "success": False,
+        }
+
+        if credit_currency_mismatch:
+            credit_result["error"] = "unsupported_currency"
+        elif not user_id:
+            credit_result["error"] = "missing_user"
+        elif not db_helper:
+            credit_result["error"] = "service_unavailable"
+        else:
+            try:
+                amount_usd_float = float(credit_amount_usd)
+                credit_metadata = {
+                    "provider": "paddle",
+                    "event_id": event_id,
+                    "transaction_id": transaction_id,
+                    "quantity": credit_quantity,
+                    "amount_usd": amount_usd_float,
+                    "inferred": credit_amount_inferred,
+                }
+                tx = await db_helper.credit_wallet(  # type: ignore
+                    user_id,
+                    amount_usd_float,
+                    metadata=credit_metadata,
+                    source_event_id=event_id,
+                )
+                credit_result["success"] = bool(tx)
+                credit_result["transaction_recorded"] = bool(tx)
+            except Exception as e:
+                logger.error(f"[PADDLE] wallet credit failed: {e}")
+                credit_result["error"] = "credit_failed"
+
+        results["credits"] = credit_result
+
+    if event_id and db_helper:
+        await db_helper.record_webhook_event(
+            "paddle",
+            event_id,
+            "processed",
+            {
+                "transaction_id": transaction_id,
+                "membership_units": membership_count,
+                "credit_quantity": credit_quantity,
+                "next_billing_at": next_billing_at.isoformat() if next_billing_at else None,
+                "results": results,
+            },
+        )
 
     return success_response(data={"processed": results}, message="paddle webhook processed")

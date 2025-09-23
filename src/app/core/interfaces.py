@@ -3,6 +3,7 @@
 """
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
+from datetime import datetime
 from core.responses import APIResponse
 
 class IAuthService(ABC):
@@ -87,7 +88,13 @@ class IMembershipService(ABC):
         pass
     
     @abstractmethod
-    async def upgrade_membership(self, user_id: str, target_level: int, duration_days: int = 30) -> Dict[str, Any]:
+    async def upgrade_membership(
+        self,
+        user_id: str,
+        target_level: int,
+        duration_days: int = 30,
+        next_billing_at: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
         """멤버십 업그레이드"""
         pass
     

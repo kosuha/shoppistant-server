@@ -4,7 +4,7 @@
 """
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List
 from enum import IntEnum
 
@@ -37,7 +37,8 @@ class MembershipService(BaseService, IMembershipService):
             result = {
                 **membership,
                 'is_expired': self._is_membership_expired(membership),
-                'days_remaining': self._get_days_remaining(membership)
+                'days_remaining': self._get_days_remaining(membership),
+                'next_billing_at': membership.get('next_billing_at'),
             }
             
             return result
@@ -46,8 +47,13 @@ class MembershipService(BaseService, IMembershipService):
             self.logger.error(f"멤버십 조회 실패: {e}")
             return None
     
-    async def upgrade_membership(self, user_id: str, target_level: int, 
-                               duration_days: int = 30) -> Dict[str, Any]:
+    async def upgrade_membership(
+        self,
+        user_id: str,
+        target_level: int,
+        duration_days: int = 30,
+        next_billing_at: datetime | None = None,
+    ) -> Dict[str, Any]:
         """멤버십 업그레이드"""
         try:
             # 유효한 레벨인지 확인
@@ -58,21 +64,35 @@ class MembershipService(BaseService, IMembershipService):
             if target_level == MembershipLevel.BASIC:
                 return await self._downgrade_to_basic(user_id)
             
-            # 만료일 계산
-            expires_at = datetime.now() + timedelta(days=duration_days)
-            
+            now = datetime.now(timezone.utc)
+            base_time = now
+
             # 기존 멤버십 조회
             current_membership = await self.db_helper.get_user_membership(user_id)
-            
+
+            if current_membership:
+                current_expires = current_membership.get('expires_at')
+                if current_expires:
+                    try:
+                        parsed_expires = datetime.fromisoformat(current_expires.replace('Z', '+00:00'))
+                        if parsed_expires.tzinfo is None:
+                            parsed_expires = parsed_expires.replace(tzinfo=timezone.utc)
+                        if parsed_expires > base_time:
+                            base_time = parsed_expires
+                    except Exception as parse_err:
+                        self.logger.warning(f"기존 만료일 파싱 실패: {parse_err}")
+
+            expires_at = base_time + timedelta(days=duration_days)
+
             if current_membership:
                 # 업데이트
                 success = await self.db_helper.update_user_membership(
-                    user_id, target_level, expires_at
+                    user_id, target_level, expires_at, next_billing_at
                 )
             else:
                 # 새로 생성
                 membership = await self.db_helper.create_user_membership(
-                    user_id, target_level, expires_at
+                    user_id, target_level, expires_at, next_billing_at
                 )
                 success = bool(membership)
             
@@ -85,7 +105,8 @@ class MembershipService(BaseService, IMembershipService):
                         'from_level': current_membership.get('membership_level', 0) if current_membership else 0,
                         'to_level': target_level,
                         'duration_days': duration_days,
-                        'expires_at': expires_at.isoformat()
+                        'expires_at': expires_at.isoformat(),
+                        'next_billing_at': next_billing_at.isoformat() if next_billing_at else None,
                     }
                 )
                 
@@ -124,7 +145,7 @@ class MembershipService(BaseService, IMembershipService):
             new_expires_at = base_time + timedelta(days=days)
             
             success = await self.db_helper.update_user_membership(
-                user_id, current_level, new_expires_at
+                user_id, current_level, new_expires_at, current_membership.get('next_billing_at')
             )
             
             if success:
@@ -159,10 +180,12 @@ class MembershipService(BaseService, IMembershipService):
             
             level = membership.get('membership_level', 0)
             expires_at = membership.get('expires_at')
+            next_billing_at = membership.get('next_billing_at')
             
             status = {
                 'level': level,
                 'expires_at': expires_at,
+                'next_billing_at': next_billing_at,
                 'is_expired': self._is_membership_expired(membership),
                 'days_remaining': self._get_days_remaining(membership)
             }
