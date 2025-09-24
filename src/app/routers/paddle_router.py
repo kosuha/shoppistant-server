@@ -349,6 +349,8 @@ async def paddle_webhook(
         ],
     )
 
+    logger.info("[PADDLE] interim results payload: %s", results)
+
     # No mapped items, just ACK (and record event for idempotency)
     if membership_count == 0 and credit_quantity == 0:
         if event_id and db_helper:
