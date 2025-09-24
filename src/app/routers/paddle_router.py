@@ -239,6 +239,17 @@ async def paddle_webhook(
         membership_service = None
         db_helper = None
 
+    if membership_service is None or db_helper is None:
+        try:
+            from core.factory import ServiceFactory
+
+            if membership_service is None:
+                membership_service = ServiceFactory.get_membership_service()
+            if db_helper is None:
+                db_helper = ServiceFactory.get_db_helper()
+        except Exception as e:  # pragma: no cover - diagnostic path
+            logger.error("[PADDLE] service fallback acquisition failed: %s", e)
+
     if event_id and db_helper:
         already_processed = await db_helper.has_processed_webhook_event("paddle", event_id)
         if already_processed:
@@ -338,6 +349,9 @@ async def paddle_webhook(
             event_id,
         )
 
+    # Prepare results structure and log item mapping summary
+    results: Dict[str, Any] = {}
+
     logger.info(
         "[PADDLE] mapped items summary: membership_count=%s credit_quantity=%s custom_keys=%s price_ids=%s",
         membership_count,
@@ -349,10 +363,9 @@ async def paddle_webhook(
         ],
     )
 
-    logger.info("[PADDLE] interim results payload: %s", results)
-
     # No mapped items, just ACK (and record event for idempotency)
     if membership_count == 0 and credit_quantity == 0:
+        logger.info("[PADDLE] interim results payload: %s", results)
         if event_id and db_helper:
             await db_helper.record_webhook_event(
                 "paddle",
@@ -430,6 +443,8 @@ async def paddle_webhook(
                 credit_result["error"] = "credit_failed"
 
         results["credits"] = credit_result
+
+    logger.info("[PADDLE] interim results payload: %s", results)
 
     if event_id and db_helper:
         await db_helper.record_webhook_event(
