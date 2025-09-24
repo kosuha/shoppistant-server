@@ -43,6 +43,10 @@ MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
         'provider': 'openai', 'provider_model': 'gpt-5-nano',
         'pricing': {'input': {'all': 0.05, 'cached': 0.005}, 'output': {'all': 0.40}}
     },
+    'gpt-5-codex': {
+        'provider': 'openai', 'provider_model': 'gpt-5-codex',
+        'pricing': {'input': {'all': 1.25, 'cached': 0.125}, 'output': {'all': 10.00}}
+    },
 
     # Anthropic
     'claude-sonnet-4': {

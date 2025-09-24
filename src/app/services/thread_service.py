@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from services.script_service import ScriptService
 from database_helper import DatabaseHelper
 from services.ai_service import AIService
-from core.membership_config import MembershipConfig
+from core.membership_config import MembershipConfig, MembershipLevel
 from core.token_calculator import TokenUsageCalculator
 from core.interfaces import IMembershipService
 
@@ -53,6 +53,14 @@ class ThreadService:
             
             features = MembershipConfig.get_features(membership_level)
             
+            if action == 'ai_chat':
+                if not MembershipConfig.can_use_feature(membership_level, 'ai_chat_enabled'):
+                    return {
+                        "allowed": False,
+                        "error": "AI 채팅은 유료 멤버십에서만 이용할 수 있습니다.",
+                        "required_level": int(MembershipLevel.BASIC),
+                        "status_code": 403,
+                    }
             # 이미지 업로드 가능 여부 확인
             if action == 'image_upload':
                 if not features.is_image_uploads:
@@ -401,6 +409,13 @@ class ThreadService:
             ai_message = None
             if message_type == "user":
                 try:
+                    limit_check = await self._check_membership_limits(user_id, 'ai_chat')
+                    if not limit_check.get('allowed', True):
+                        return {
+                            "success": False,
+                            "error": limit_check.get('error', "AI 채팅 이용이 제한되었습니다."),
+                            "status_code": limit_check.get('status_code', 403),
+                        }
                     # 사전 잔액 확인 (최소 예상 비용의 보수적 하한 검사)
                     msg = await self._validate_wallet_min_balance(user_id)
                     if msg:

@@ -170,13 +170,13 @@ class ChatThread(BaseModel):
     last_message_at: Optional[datetime] = Field(default=None, description="마지막 메시지 시간")
 
 # Membership Types
-MembershipLevelType = Literal[0, 1, 2]
+MembershipLevelType = Literal[0, 1, 2, 3]
 
 class UserMembership(BaseModel):
     """사용자 멤버십 모델"""
     id: str = Field(..., description="멤버십 ID")
     user_id: str = Field(..., description="사용자 ID")
-    membership_level: MembershipLevelType = Field(..., description="멤버십 레벨 (0:기본, 1:프리미엄, 2:프로)")
+    membership_level: MembershipLevelType = Field(..., description="멤버십 레벨 (0:무료, 1:베이직, 2:프리미엄, 3:최상위)")
     expires_at: Optional[datetime] = Field(None, description="만료일")
     next_billing_at: Optional[datetime] = Field(None, description="다음 결제 예정일")
     created_at: Optional[datetime] = Field(default=None, description="생성 시간")

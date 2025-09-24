@@ -3,21 +3,14 @@
 사용자 멤버십 등급, 만료일 관리 및 권한 검증
 """
 import logging
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List
-from enum import IntEnum
 
 from core.interfaces import IDatabaseHelper, IMembershipService
 from core.base_service import BaseService
+from core.membership_config import MembershipLevel
 
 logger = logging.getLogger(__name__)
-
-class MembershipLevel(IntEnum):
-    """멤버십 레벨 열거형"""
-    BASIC = 0      # 기본 등급 (무료)
-    PREMIUM = 1    # 프리미엄 등급
-    PRO = 2        # 프로 등급
 
 class MembershipService(BaseService, IMembershipService):
     """멤버십 관리 서비스"""
@@ -60,9 +53,9 @@ class MembershipService(BaseService, IMembershipService):
             if target_level not in [level.value for level in MembershipLevel]:
                 raise ValueError(f"유효하지 않은 멤버십 레벨: {target_level}")
             
-            # 기본 등급으로의 다운그레이드는 별도 처리
-            if target_level == MembershipLevel.BASIC:
-                return await self._downgrade_to_basic(user_id)
+            # 무료 등급으로의 다운그레이드는 별도 처리
+            if target_level == MembershipLevel.FREE:
+                return await self._downgrade_to_free(user_id)
             
             now = datetime.now(timezone.utc)
             base_time = now
@@ -129,9 +122,9 @@ class MembershipService(BaseService, IMembershipService):
             
             current_level = current_membership.get('membership_level', 0)
             
-            # 기본 등급은 연장할 수 없음
-            if current_level == MembershipLevel.BASIC:
-                raise ValueError("기본 등급은 연장할 수 없습니다")
+            # 무료 등급은 연장할 수 없음
+            if current_level == MembershipLevel.FREE:
+                raise ValueError("무료 등급은 연장할 수 없습니다")
             
             # 현재 만료일 기준으로 연장
             current_expires = current_membership.get('expires_at')
@@ -220,7 +213,7 @@ class MembershipService(BaseService, IMembershipService):
         """멤버십 만료 여부 확인"""
         expires_at = membership.get('expires_at')
         if not expires_at:
-            return False  # 만료일이 없는 기본 등급
+            return False  # 만료일이 없는 무료 등급
         
         try:
             expires_dt = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
@@ -232,7 +225,7 @@ class MembershipService(BaseService, IMembershipService):
         """남은 일수 계산"""
         expires_at = membership.get('expires_at')
         if not expires_at:
-            return None  # 무제한 (기본 등급)
+            return None  # 무제한 (무료 등급)
         
         try:
             expires_dt = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
@@ -242,24 +235,24 @@ class MembershipService(BaseService, IMembershipService):
             return None
     
     
-    async def _downgrade_to_basic(self, user_id: str) -> Dict[str, Any]:
-        """기본 등급으로 다운그레이드"""
+    async def _downgrade_to_free(self, user_id: str) -> Dict[str, Any]:
+        """무료 등급으로 다운그레이드"""
         try:
             success = await self.db_helper.update_user_membership(
-                user_id, MembershipLevel.BASIC, None
+                user_id, MembershipLevel.FREE, None
             )
-            
+
             if success:
                 await self.db_helper.log_system_event(
                     user_id=user_id,
                     event_type='membership_downgrade',
-                    event_data={'reason': 'manual', 'new_level': MembershipLevel.BASIC}
+                    event_data={'reason': 'manual', 'new_level': int(MembershipLevel.FREE)}
                 )
-                
+
                 return await self.get_user_membership(user_id)
             else:
                 raise Exception("다운그레이드 실패")
                 
         except Exception as e:
-            self.logger.error(f"기본 등급 다운그레이드 실패: {e}")
+            self.logger.error(f"무료 등급 다운그레이드 실패: {e}")
             return {}

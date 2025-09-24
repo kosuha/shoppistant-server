@@ -127,7 +127,7 @@ class AIService:
                     m = raw_meta.get('ai_model_preferred')
                     if isinstance(m, str):
                         mk = m.strip()
-                        if mk and mk != 'auto' and MembershipConfig.is_valid_model(mk):
+                        if mk and mk != 'auto':
                             preferred_from_client = mk
             except Exception:
                 preferred_from_client = None
@@ -168,6 +168,9 @@ class AIService:
         try:
             # 멤버십별 AI 모델 및 설정 가져오기
             preferred_model = preferred_from_client or MembershipConfig.get_ai_model(membership_level)
+            if not preferred_model:
+                logger.info("AI 모델 미설정 멤버십 요청 거부: user_id=%s level=%s", context_info.get('user_id'), membership_level)
+                return ("현재 멤버십 등급에서는 AI 채팅을 사용할 수 없습니다.", None)
             thinking_budget = MembershipConfig.get_thinking_budget(membership_level)
             
             # 프롬프트 텍스트 가져오기 (컨텍스트 정보를 직접 전달)
