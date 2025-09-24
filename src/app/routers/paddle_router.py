@@ -159,7 +159,22 @@ async def paddle_webhook(
     # Extract fields
     event_type: str = payload.get("event_type") or payload.get("eventType") or ""
     data = payload.get("data") or payload
-    custom = _get(data, "custom_data") or _get(data, "customData") or {}
+    custom_raw = _get(data, "custom_data") or _get(data, "customData") or {}
+    custom: Dict[str, Any] = {}
+    if isinstance(custom_raw, dict):
+        custom = custom_raw
+    elif isinstance(custom_raw, str):
+        try:
+            parsed = json.loads(custom_raw)
+            if isinstance(parsed, dict):
+                custom = parsed
+            else:
+                logger.warning("[PADDLE] custom_data parsed to non-dict type: %s", type(parsed))
+        except json.JSONDecodeError:
+            logger.warning("[PADDLE] failed to decode custom_data payload: %s", custom_raw)
+    elif custom_raw:
+        logger.warning("[PADDLE] unsupported custom_data type: %s", type(custom_raw))
+
     uid = custom.get("uid") or custom.get("user_id") or custom.get("userId")
     email = _get(data, "customer", "email") or _get(data, "customer_email")
     items: List[Dict[str, Any]] = data.get("items") or []
