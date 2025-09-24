@@ -338,6 +338,17 @@ async def paddle_webhook(
             event_id,
         )
 
+    logger.info(
+        "[PADDLE] mapped items summary: membership_count=%s credit_quantity=%s custom_keys=%s price_ids=%s",
+        membership_count,
+        credit_quantity,
+        sorted(custom.keys()),
+        [
+            _get(it, "price", "id") or it.get("price_id") or it.get("priceId")
+            for it in items
+        ],
+    )
+
     # No mapped items, just ACK (and record event for idempotency)
     if membership_count == 0 and credit_quantity == 0:
         if event_id and db_helper:
