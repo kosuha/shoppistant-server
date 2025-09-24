@@ -8,27 +8,27 @@ from typing import Dict, Any, Tuple, List, Optional
 
 MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
     # Google Gemini
-    # 'gemini-2.5-pro': {
-    #     'provider': 'google', 'provider_model': 'gemini-2.5-pro',
-    #     'pricing': {
-    #         'input': {'small_context': 1.25, 'large_context': 2.50},
-    #         'output': {'small_context': 10.00, 'large_context': 15.00}
-    #     }
-    # },
-    # 'gemini-2.5-flash': {
-    #     'provider': 'google', 'provider_model': 'gemini-2.5-flash',
-    #     'pricing': {
-    #         'input': {'text_image_video': 0.30, 'audio': 1.00},
-    #         'output': {'all': 2.50}
-    #     }
-    # },
-    # 'gemini-2.5-flash-lite': {
-    #     'provider': 'google', 'provider_model': 'gemini-2.5-flash-lite',
-    #     'pricing': {
-    #         'input': {'text_image_video': 0.10, 'audio': 0.30},
-    #         'output': {'all': 0.40}
-    #     }
-    # },
+    'gemini-2.5-pro': {
+        'provider': 'google', 'provider_model': 'gemini-2.5-pro',
+        'pricing': {
+            'input': {'small_context': 1.25, 'large_context': 2.50},
+            'output': {'small_context': 10.00, 'large_context': 15.00}
+        }
+    },
+    'gemini-2.5-flash': {
+        'provider': 'google', 'provider_model': 'gemini-2.5-flash',
+        'pricing': {
+            'input': {'text_image_video': 0.30, 'audio': 1.00},
+            'output': {'all': 2.50}
+        }
+    },
+    'gemini-2.5-flash-lite': {
+        'provider': 'google', 'provider_model': 'gemini-2.5-flash-lite',
+        'pricing': {
+            'input': {'text_image_video': 0.10, 'audio': 0.30},
+            'output': {'all': 0.40}
+        }
+    },
 
     # OpenAI
     'gpt-5': {
