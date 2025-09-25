@@ -263,6 +263,14 @@ async def paddle_webhook(
         credits_unit_price = Decimal(os.getenv("CREDITS_UNIT_PRICE_USD", "1.4"))
     except (InvalidOperation, TypeError):
         credits_unit_price = Decimal("0")
+    try:
+        credits_pack_size = Decimal(
+            os.getenv("CREDITS_PACK_SIZE")
+            or os.getenv("CREDITS_BUNDLE_SIZE")
+            or "5"
+        )
+    except (InvalidOperation, TypeError):
+        credits_pack_size = Decimal("0")
 
     # Dispatch items
     membership_count = 0
@@ -404,10 +412,31 @@ async def paddle_webhook(
     elif membership_count > 0 and not membership_service:
         results["membership"] = {"success": False, "reason": "service_unavailable"}
 
-    # Credits top-up: credit wallet with USD equivalent
+    # Credits top-up: credit wallet using configured USD-to-credit conversion
     if credit_quantity > 0:
+        credits_to_grant: Optional[Decimal] = None
+        if credit_quantity > 0 and credits_pack_size > 0:
+            try:
+                credits_to_grant = (Decimal(credit_quantity) * credits_pack_size).quantize(
+                    Decimal("0.0001"),
+                    rounding=ROUND_HALF_UP,
+                )
+            except (InvalidOperation, TypeError, ValueError):
+                credits_to_grant = None
+        if credits_to_grant is None and credit_amount_usd and credit_amount_usd > 0 and credits_unit_price > 0:
+            try:
+                credits_to_grant = (credit_amount_usd / credits_unit_price).quantize(
+                    Decimal("0.0001"),
+                    rounding=ROUND_HALF_UP,
+                )
+            except (InvalidOperation, TypeError, ValueError):
+                credits_to_grant = None
+        if credits_to_grant is None and credit_quantity > 0:
+            credits_to_grant = Decimal(credit_quantity)
+
         credit_result: Dict[str, Any] = {
-            "quantity": credit_quantity,
+            "quantity": float(credits_to_grant) if credits_to_grant is not None else credit_quantity,
+            "credit_packs": credit_quantity,
             "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
             "inferred": credit_amount_inferred,
             "success": False,
@@ -421,18 +450,20 @@ async def paddle_webhook(
             credit_result["error"] = "service_unavailable"
         else:
             try:
-                amount_usd_float = float(credit_amount_usd)
+                credit_float = float(credits_to_grant) if credits_to_grant is not None else float(credit_amount_usd)
                 credit_metadata = {
                     "provider": "paddle",
                     "event_id": event_id,
                     "transaction_id": transaction_id,
                     "quantity": credit_quantity,
-                    "amount_usd": amount_usd_float,
+                    "pack_size": float(credits_pack_size) if credits_pack_size else None,
+                    "credits_granted": credit_float,
+                    "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
                     "inferred": credit_amount_inferred,
                 }
                 tx = await db_helper.credit_wallet(  # type: ignore
                     user_id,
-                    amount_usd_float,
+                    credit_float,
                     metadata=credit_metadata,
                     source_event_id=event_id,
                 )
