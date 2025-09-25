@@ -278,6 +278,7 @@ async def paddle_webhook(
     credit_amount_usd = Decimal("0")
     credit_amount_inferred = False
     credit_currency_mismatch = False
+    credit_currency_codes: set[str] = set()
 
     for it in items:
         # Try multiple shapes for price id
@@ -302,6 +303,7 @@ async def paddle_webhook(
                 or "USD"
             )
             item_currency = item_currency.upper()
+            credit_currency_codes.add(item_currency)
 
             totals = it.get("totals") or {}
             raw_total = (
@@ -327,6 +329,14 @@ async def paddle_webhook(
             if raw_total_dec is not None:
                 if item_currency == "USD":
                     amount_dec = (raw_total_dec / Decimal(100)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                elif credits_unit_price > 0 and qty > 0:
+                    amount_dec = (credits_unit_price * Decimal(qty)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    credit_amount_inferred = True
+                    logger.info(
+                        "[PADDLE] non-USD currency %s detected; inferred USD amount using configuration (event %s)",
+                        item_currency,
+                        event_id,
+                    )
                 else:
                     credit_currency_mismatch = True
                     logger.error(
@@ -439,6 +449,7 @@ async def paddle_webhook(
             "credit_packs": credit_quantity,
             "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
             "inferred": credit_amount_inferred,
+            "currencies": sorted(credit_currency_codes) if credit_currency_codes else [],
             "success": False,
         }
 
@@ -460,6 +471,7 @@ async def paddle_webhook(
                     "credits_granted": credit_float,
                     "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
                     "inferred": credit_amount_inferred,
+                    "currencies": sorted(credit_currency_codes) if credit_currency_codes else None,
                 }
                 tx = await db_helper.credit_wallet(  # type: ignore
                     user_id,
