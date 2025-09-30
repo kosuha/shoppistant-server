@@ -412,8 +412,16 @@ class DatabaseHelper:
     
     # Site Scripts 관련 함수들
     
-    async def update_site_script_separated(self, user_id: str, site_code: str, css_content: str, js_content: str) -> Dict[str, Any]:
-        """사이트 스크립트 업데이트 (CSS/JS 분리 저장)"""
+    async def update_site_script_separated(
+        self,
+        user_id: str,
+        site_code: str,
+        css_content: str,
+        script_content: str,
+        draft_css_content: str,
+        draft_script_content: str,
+    ) -> Dict[str, Any]:
+        """사이트 스크립트 업데이트 (배포 및 초안 동기화)"""
         try:
             # 사용자가 해당 사이트에 접근 권한이 있는지 확인
             site = await self.get_user_site_by_code(user_id, site_code)
@@ -424,9 +432,13 @@ class DatabaseHelper:
             current_script = await self.get_site_script(user_id, site_code)
             
             # 현재 활성 스크립트와 동일한 내용인지 확인
-            if (current_script and 
-                current_script.get('css_content', '') == css_content and 
-                current_script.get('script_content', '') == js_content):
+            if (
+                current_script and
+                current_script.get('css_content', '') == css_content and
+                current_script.get('script_content', '') == script_content and
+                current_script.get('draft_css_content', '') == draft_css_content and
+                current_script.get('draft_script_content', '') == draft_script_content
+            ):
                 return current_script
             
             client = self._get_client(use_admin=True)
@@ -434,10 +446,14 @@ class DatabaseHelper:
             if current_script:
                 # 기존 활성 스크립트가 있으면 CSS/JS 내용 수정
                 script_id = current_script['id']
+                now_iso = datetime.now().isoformat()
                 result = client.table('site_scripts').update({
                     'css_content': css_content,
-                    'script_content': js_content,  # JS는 기존 script_content 컬럼 사용
-                    'updated_at': datetime.now().isoformat()
+                    'script_content': script_content,
+                    'draft_css_content': draft_css_content,
+                    'draft_script_content': draft_script_content,
+                    'draft_updated_at': now_iso,
+                    'updated_at': now_iso
                 }).eq('id', script_id).execute()
                 return result.data[0] if result.data else {}
             else:
@@ -446,7 +462,10 @@ class DatabaseHelper:
                     'user_id': user_id,
                     'site_code': site_code,
                     'css_content': css_content,
-                    'script_content': js_content,  # JS는 기존 script_content 컬럼 사용
+                    'script_content': script_content,
+                    'draft_css_content': draft_css_content,
+                    'draft_script_content': draft_script_content,
+                    'draft_updated_at': datetime.now().isoformat(),
                     'version': 1,
                     'is_active': True
                 }
@@ -455,6 +474,44 @@ class DatabaseHelper:
             
         except Exception as e:
             logger.error(f"CSS/JS 스크립트 업데이트 실패: {e}")
+            return {}
+
+    async def update_site_script_draft(self, user_id: str, site_code: str, css_content: str, script_content: str) -> Dict[str, Any]:
+        """사이트 스크립트 임시 저장 (초안)"""
+        try:
+            site = await self.get_user_site_by_code(user_id, site_code)
+            if not site:
+                raise PermissionError("사이트에 접근할 권한이 없습니다.")
+
+            current_script = await self.get_site_script(user_id, site_code)
+            client = self._get_client(use_admin=True)
+            now_iso = datetime.now().isoformat()
+
+            payload = {
+                'draft_css_content': css_content,
+                'draft_script_content': script_content,
+                'draft_updated_at': now_iso,
+            }
+
+            if current_script:
+                script_id = current_script['id']
+                result = client.table('site_scripts').update(payload).eq('id', script_id).execute()
+                return result.data[0] if result.data else {}
+            else:
+                script_data = {
+                    'user_id': user_id,
+                    'site_code': site_code,
+                    'css_content': '',
+                    'script_content': '',
+                    **payload,
+                    'version': 1,
+                    'is_active': False
+                }
+                result = client.table('site_scripts').insert(script_data).execute()
+                return result.data[0] if result.data else {}
+
+        except Exception as e:
+            logger.error(f"스크립트 초안 저장 실패: {e}")
             return {}
 
     async def update_site_script(self, user_id: str, site_code: str, script_content: str) -> Dict[str, Any]:
@@ -477,9 +534,13 @@ class DatabaseHelper:
             if current_script:
                 # 기존 활성 스크립트가 있으면 내용만 수정
                 script_id = current_script['id']
+                now_iso = datetime.now().isoformat()
                 result = client.table('site_scripts').update({
                     'script_content': script_content,
-                    'updated_at': datetime.now().isoformat()
+                    'draft_script_content': script_content,
+                    'draft_css_content': '',
+                    'draft_updated_at': now_iso,
+                    'updated_at': now_iso
                 }).eq('id', script_id).execute()
                 return result.data[0] if result.data else {}
             else:
@@ -488,6 +549,9 @@ class DatabaseHelper:
                     'user_id': user_id,
                     'site_code': site_code,
                     'script_content': script_content,
+                    'draft_script_content': script_content,
+                    'draft_css_content': '',
+                    'draft_updated_at': datetime.now().isoformat(),
                     'version': 1,
                     'is_active': True
                 }

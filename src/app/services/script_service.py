@@ -1,6 +1,10 @@
-import requests
 import logging
 from typing import Dict, Any
+
+try:
+    from app.utils.code_bundle import build_active_output, merge_language_sources, build_language_source
+except ModuleNotFoundError:
+    from utils.code_bundle import build_active_output, merge_language_sources, build_language_source
 
 # Core imports
 from core.interfaces import IScriptService, IDatabaseHelper
@@ -67,29 +71,51 @@ class ScriptService(BaseService, IScriptService):
         
         # 데이터베이스에서 활성 스크립트 조회
         script_data = await self.db_helper.get_site_script(user_id, site_code)
-        
+
         if script_data:
             self.logger.debug(f"사이트 {site_code}의 활성 스크립트 발견")
-            
+
             await self.log_user_action(user_id, "script_viewed", {
                 "site_code": site_code,
                 "script_version": script_data.get('version')
             })
-            
-            # CSS/JS 분리 응답 (하위 호환성을 위해 script도 포함)
+
+            deployed_script = script_data.get('script_content') or ''
+            deployed_css = script_data.get('css_content') or ''
+            draft_script = script_data.get('draft_script_content') or deployed_script
+            draft_css = script_data.get('draft_css_content') or deployed_css
+
+            if '/*#FILE' not in draft_script and '/*#FILE' not in draft_css:
+                legacy_files = [{
+                    'id': 'legacy',
+                    'name': 'main',
+                    'active': True,
+                    'order': 1,
+                    'javascript': draft_script or deployed_script,
+                    'css': draft_css or deployed_css,
+                }]
+                draft_script = build_language_source(legacy_files, 'javascript')
+                draft_css = build_language_source(legacy_files, 'css')
+
+            files = merge_language_sources(draft_script, draft_css)
+
             return {
-                "css_content": script_data.get('css_content', ''),
-                "js_content": script_data.get('script_content', ''),  # JS는 script_content 컬럼 사용
-                "script": script_data.get('script_content', ''),  # 하위 호환성
+                "script_content": deployed_script,
+                "css_content": deployed_css,
+                "draft_script_content": draft_script,
+                "draft_css_content": draft_css,
+                "draft_updated_at": script_data.get('draft_updated_at'),
                 "version": script_data.get('version', 1),
                 "last_updated": script_data.get('updated_at', script_data.get('created_at'))
             }
         else:
             self.logger.debug(f"사이트 {site_code}의 활성 스크립트가 없음")
             return {
+                "script_content": '',
                 "css_content": '',
-                "js_content": '',  # JS는 script_content 컬럼 사용
-                "script": '',  # 하위 호환성
+                "draft_script_content": '',
+                "draft_css_content": '',
+                "draft_updated_at": None,
                 "version": 0,
                 "last_updated": None
             }
@@ -121,16 +147,127 @@ class ScriptService(BaseService, IScriptService):
         if not domain:
             raise BusinessException("사이트의 도메인 정보가 설정되지 않았습니다", "DOMAIN_NOT_SET", 400)
         
-        # CSS/JS 스크립트 데이터 처리
-        css_content = scripts_data.get('css_content', '').strip()
-        js_content = scripts_data.get('js_content', '').strip()
-        
-        if not css_content and not js_content:
-            # 빈 스크립트 - 삭제 처리
+        current_script = await self.db_helper.get_site_script(user_id, site_code)
+        if not current_script:
+            raise BusinessException("저장된 스크립트가 없습니다", "SCRIPT_NOT_FOUND", 404)
+
+        draft_script = scripts_data.get('draft_script_content', '').strip() or current_script.get('draft_script_content', '') or ''
+        draft_css = scripts_data.get('draft_css_content', '').strip() or current_script.get('draft_css_content', '') or ''
+
+        if '/*#FILE' not in draft_script and '/*#FILE' not in draft_css:
+            legacy_files = [{
+                'id': 'legacy',
+                'name': 'main',
+                'active': True,
+                'order': 1,
+                'javascript': draft_script,
+                'css': draft_css,
+            }]
+            draft_script = build_language_source(legacy_files, 'javascript')
+            draft_css = build_language_source(legacy_files, 'css')
+
+        files = merge_language_sources(draft_script, draft_css)
+
+        if not draft_script.strip() and not draft_css.strip():
             return await self._handle_script_deletion(user_id, site_code)
-        else:
-            # 스크립트 배포 처리 (CSS/JS 분리)
-            return await self._handle_script_deployment_separated(user_id, site_code, css_content, js_content)
+
+        active_js, active_css = build_active_output(files) if files else ('', '')
+
+        script_record = await self.db_helper.update_site_script_separated(
+            user_id,
+            site_code,
+            active_css,
+            active_js,
+            draft_css,
+            draft_script,
+        )
+        if not script_record:
+            raise BusinessException("스크립트 데이터베이스 저장 실패", "DB_SAVE_FAILED", 500)
+
+        return {
+            "site_code": site_code,
+            "message": "스크립트가 배포되었습니다.",
+            "script_content": script_record.get('script_content', active_js),
+            "css_content": script_record.get('css_content', active_css),
+            "draft_script_content": script_record.get('draft_script_content', draft_script),
+            "draft_css_content": script_record.get('draft_css_content', draft_css),
+            "draft_updated_at": script_record.get('draft_updated_at'),
+            "version": script_record.get('version'),
+            "updated_at": script_record.get('updated_at'),
+        }
+
+    async def save_site_script_draft(self, user_id: str, site_code: str, scripts_data: Dict[str, str]) -> Dict[str, Any]:
+        """특정 사이트의 스크립트를 임시 저장합니다."""
+        return await self.handle_operation(
+            "사이트 스크립트 임시 저장",
+            self._save_site_script_draft_internal,
+            user_id, site_code, scripts_data
+        )
+
+    async def _save_site_script_draft_internal(self, user_id: str, site_code: str, scripts_data: Dict[str, str]) -> Dict[str, Any]:
+        self.validate_required_fields(
+            {"user_id": user_id, "site_code": site_code},
+            ["user_id", "site_code"]
+        )
+
+        site = await self.db_helper.get_user_site_by_code(user_id, site_code)
+        if not site:
+            raise BusinessException("사이트를 찾을 수 없거나 접근 권한이 없습니다", "SITE_NOT_FOUND", 404)
+
+        current_script = await self.db_helper.get_site_script(user_id, site_code)
+
+        draft_script = scripts_data.get('draft_script_content', '').strip()
+        draft_css = scripts_data.get('draft_css_content', '').strip()
+
+        if '/*#FILE' not in draft_script and '/*#FILE' not in draft_css:
+            legacy_files = [{
+                'id': 'legacy',
+                'name': 'main',
+                'active': True,
+                'order': 1,
+                'javascript': draft_script,
+                'css': draft_css,
+            }]
+            draft_script = build_language_source(legacy_files, 'javascript')
+            draft_css = build_language_source(legacy_files, 'css')
+
+        files = merge_language_sources(draft_script, draft_css)
+        draft_active_js, draft_active_css = build_active_output(files) if files else ('', '')
+
+        if draft_active_css and len(draft_active_css.encode('utf-8')) > 50 * 1024:
+            raise ValidationException("CSS 크기가 50KB를 초과합니다.")
+
+        if draft_active_js:
+            validation_result = self.validate_script_content(draft_active_js)
+            if not validation_result.is_valid:
+                error_messages = [err.message for err in validation_result.errors]
+                raise ValidationException(f"JavaScript 검증 실패: {'; '.join(error_messages)}")
+
+        script_record = await self.db_helper.update_site_script_draft(
+            user_id,
+            site_code,
+            draft_css,
+            draft_script,
+        )
+        if not script_record:
+            raise BusinessException("스크립트 초안 저장에 실패했습니다.", "DB_SAVE_FAILED", 500)
+
+        await self.log_user_action(user_id, "script_draft_saved", {
+            "site_code": site_code,
+            "draft_updated_at": script_record.get('draft_updated_at')
+        })
+
+        return {
+            "site_code": site_code,
+            "message": "스크립트 초안이 저장되었습니다.",
+            "draft_script_content": script_record.get('draft_script_content', draft_script),
+            "draft_css_content": script_record.get('draft_css_content', draft_css),
+            "draft_updated_at": script_record.get('draft_updated_at'),
+            "script_content": script_record.get('script_content', current_script.get('script_content') if current_script else ''),
+            "css_content": script_record.get('css_content', current_script.get('css_content') if current_script else ''),
+            "version": script_record.get('version', current_script.get('version') if current_script else 0),
+            "updated_at": script_record.get('updated_at', current_script.get('updated_at') if current_script else None),
+        }
     
     async def _handle_script_deletion(self, user_id: str, site_code: str) -> Dict[str, Any]:
         """스크립트 삭제 처리"""
@@ -150,45 +287,4 @@ class ScriptService(BaseService, IScriptService):
             "site_code": site_code,
             "deployed_scripts": {"header": "", "body": "", "footer": ""},
             "message": "스크립트가 삭제되었습니다."
-        }
-    
-    async def _handle_script_deployment_separated(self, user_id: str, site_code: str, css_content: str, js_content: str) -> Dict[str, Any]:
-        """CSS/JS 분리 스크립트 배포 처리"""
-        # CSS 검증 (기본 크기 검증)
-        if css_content and len(css_content.encode('utf-8')) > 50 * 1024:  # 50KB 제한
-            raise ValidationException("CSS 크기가 50KB를 초과합니다.")
-            
-        # JS 검증
-        if js_content:
-            validation_result = self.validate_script_content(js_content)
-            if not validation_result.is_valid:
-                error_messages = [err.message for err in validation_result.errors]
-                raise ValidationException(f"JavaScript 검증 실패: {'; '.join(error_messages)}")
-        
-        # 1단계: DB에 CSS/JS 분리 저장
-        script_record = await self.db_helper.update_site_script_separated(user_id, site_code, css_content, js_content)
-        if not script_record:
-            raise BusinessException("스크립트 데이터베이스 저장 실패", "DB_SAVE_FAILED", 500)
-        
-        return {
-            "site_code": site_code,
-            "message": "CSS와 JavaScript가 분리되어 데이터베이스에 저장되고 배포되었습니다."
-        }
-
-    async def _handle_script_deployment(self, user_id: str, site_code: str, script_content: str) -> Dict[str, Any]:
-        """기존 통합 스크립트 배포 처리 (하위 호환성)"""
-        # 스크립트 검증
-        validation_result = self.validate_script_content(script_content)
-        if not validation_result.is_valid:
-            error_messages = [err.message for err in validation_result.errors]
-            raise ValidationException(f"스크립트 검증 실패: {'; '.join(error_messages)}")
-        
-        # 1단계: DB에 스크립트 저장
-        script_record = await self.db_helper.update_site_script(user_id, site_code, script_content)
-        if not script_record:
-            raise BusinessException("스크립트 데이터베이스 저장 실패", "DB_SAVE_FAILED", 500)
-        
-        return {
-            "site_code": site_code,
-            "message": "스크립트가 데이터베이스에 저장되고 모듈 형태로 배포되었습니다."
         }

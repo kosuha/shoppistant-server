@@ -48,7 +48,13 @@ class MockScriptService(IScriptService):
         return {
             "success": True,
             "data": {
-                "script": "console.log('test script');"
+                "script_content": "console.log('test script');",
+                "css_content": "",
+                "draft_script_content": "/*#FILE {\"id\":\"1\",\"name\":\"main\",\"active\":true,\"order\":1}*/\nconsole.log('test script');\n/*#END FILE*/",
+                "draft_css_content": "/*#FILE {\"id\":\"1\",\"name\":\"main\",\"active\":true,\"order\":1}*/\n/*#END FILE*/",
+                "draft_updated_at": "2023-01-01T00:00:00Z",
+                "version": 1,
+                "last_updated": "2023-01-01T00:00:00Z"
             }
         }
     
@@ -56,8 +62,27 @@ class MockScriptService(IScriptService):
         return {
             "success": True,
             "data": {
-                "deployed_at": "2023-01-01T00:00:00Z",
-                "site_code": site_code
+                "site_code": site_code,
+                "message": "스크립트가 배포되었습니다.",
+                "script_content": "console.log('test script');",
+                "css_content": "",
+                "draft_script_content": scripts_data.get('draft_script_content', ''),
+                "draft_css_content": scripts_data.get('draft_css_content', ''),
+                "draft_updated_at": "2023-01-01T00:00:00Z",
+                "version": 2,
+                "updated_at": "2023-01-01T00:00:00Z"
+            }
+        }
+
+    async def save_site_script_draft(self, user_id: str, site_code: str, scripts_data: Dict[str, str]) -> Dict[str, Any]:
+        return {
+            "success": True,
+            "data": {
+                "site_code": site_code,
+                "draft_script_content": scripts_data.get('draft_script_content', ''),
+                "draft_css_content": scripts_data.get('draft_css_content', ''),
+                "draft_updated_at": "2023-01-01T00:00:00Z",
+                "message": "스크립트 초안이 저장되었습니다.",
             }
         }
 

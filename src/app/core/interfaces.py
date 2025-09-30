@@ -27,6 +27,11 @@ class IScriptService(ABC):
         """사이트 스크립트 배포"""
         pass
 
+    @abstractmethod
+    async def save_site_script_draft(self, user_id: str, site_code: str, scripts_data: Dict[str, str]) -> Dict[str, Any]:
+        """사이트 스크립트 임시 저장"""
+        pass
+
 class IImwebService(ABC):
     """아임웹 서비스 인터페이스"""
     

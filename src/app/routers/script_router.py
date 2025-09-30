@@ -80,6 +80,35 @@ async def deploy_site_scripts(site_code: str, request: Request, user=Depends(ens
         })
 
 
+@router.post("/draft")
+async def save_site_script_draft(site_code: str, request: Request, user=Depends(ensure_membership)):
+    """특정 사이트 스크립트를 임시 저장하는 API"""
+    from main import script_service
+
+    try:
+        request_data = await request.json()
+
+        result = await script_service.save_site_script_draft(user.id, site_code, request_data)
+
+        if not result["success"]:
+            raise HTTPException(status_code=result.get("status_code", 500), detail=result["error"])
+
+        return JSONResponse(status_code=200, content={
+            "status": "success",
+            "data": result["data"],
+            "message": result["data"].get("message", "초안이 저장되었습니다")
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"스크립트 초안 저장 API 실패: {e}")
+        return JSONResponse(status_code=500, content={
+            "status": "error",
+            "message": str(e)
+        })
+
+
 # 별도 라우터: 스크립트/CSS 모듈 제공용 (인증 불필요)
 module_router = APIRouter(prefix="/api/v1/sites/{site_code}", tags=["script-module"])
 
@@ -94,10 +123,9 @@ async def get_site_styles_module(site_code: str):
         script_data = await script_service.db_helper.get_site_script_by_code_public(site_code)
         
         if not script_data:
-            # CSS가 없으면 빈 CSS 반환
             css_content = "/* No active styles found for this site */"
         else:
-            css_content = script_data.get('css_content', '/* Empty styles */')
+            css_content = (script_data.get('css_content') or '').strip() or "/* Empty styles */"
         
         # 사이트 도메인 조회하여 CORS Origin 설정
         site_domain = await script_service.db_helper.get_site_domain_by_code_public(site_code)
@@ -136,11 +164,9 @@ async def get_site_script_module(site_code: str):
         script_data = await script_service.db_helper.get_site_script_by_code_public(site_code)
         
         if not script_data:
-            # JS가 없으면 빈 스크립트 반환
             js_content = "// No active script found for this site"
         else:
-            # JavaScript는 script_content 컬럼 사용
-            js_content = script_data.get('script_content', '// Empty script')
+            js_content = (script_data.get('script_content') or '').strip() or "// Empty script"
         
         # 사이트 도메인 조회하여 CORS Origin 설정
         site_domain = await script_service.db_helper.get_site_domain_by_code_public(site_code)
