@@ -21,6 +21,18 @@ def _format_context_section(context_info: dict) -> str:
             formatted += "### CSS:\n```css\n"
             formatted += user_code['css']
             formatted += "\n```\n\n"
+
+    primary_file_id = context_info.get('primarySelectedFileId')
+    selected_files = context_info.get('selectedFiles') or []
+    if selected_files:
+        formatted += "## Selected Files For Editing:\n"
+        for file in selected_files:
+            file_id = file.get('id', 'unknown-id')
+            name = file.get('name') or file_id
+            formatted += f"- {name} (id: {file_id})\n"
+        if primary_file_id:
+            formatted += f"- Primary target file id: {primary_file_id}\n"
+        formatted += "- Only modify these files. Do not touch other file IDs.\n\n"
     
     # 페이지 컨텍스트 (DOM 구조)
     page_context = context_info.get('pageContext', '')
@@ -56,6 +68,18 @@ def _format_context_section_korean(context_info: dict) -> str:
             formatted += "### CSS:\n```css\n"
             formatted += user_code['css']
             formatted += "\n```\n\n"
+
+    primary_file_id = context_info.get('primarySelectedFileId')
+    selected_files = context_info.get('selectedFiles') or []
+    if selected_files:
+        formatted += "## 편집 대상 파일:\n"
+        for file in selected_files:
+            file_id = file.get('id', 'unknown-id')
+            name = file.get('name') or file_id
+            formatted += f"- {name} (id: {file_id})\n"
+        if primary_file_id:
+            formatted += f"- 기본 대상 파일 id: {primary_file_id}\n"
+        formatted += "- 위 파일들만 수정하고 다른 파일 ID는 건드리지 마세요.\n\n"
     
     # 페이지 컨텍스트 (DOM 구조)
     page_context = context_info.get('pageContext', '')
@@ -146,6 +170,12 @@ Choose the most appropriate codeAction based on the request:
   
 - **"replace"**: Only when complete rewrite is necessary or explicitly requested
   - Example: User asks to "completely rewrite this function"
+
+## File Targeting Rules:
+- Only modify the file blocks whose IDs appear in the selected list: {", ".join(context_info.get('selectedFileIds', [])) or "None (no file IDs provided)"}
+- Primary target file (if any): {context_info.get('primarySelectedFileId') or "None"}
+- Keep every `/*#FILE ...*/` header and the matching `/*#FILE_END*/` marker intact.
+- Do not introduce or modify other file IDs unless the user explicitly instructs you.
 
 # Response Rules:
 - Always respond in the user's language (English/Korean)
@@ -319,6 +349,12 @@ GitHub Copilot이나 Cursor AI와 같은 AI 코딩 어시스턴트로서 사용�
 - 기존 네이밍 패턴과 스타일 일관성 유지  
 - 구체적인 선택자로 기존 스타일과 충돌 방지
 - !important는 필요한 경우에만 신중하게 사용
+
+## 파일 타겟팅 규칙:
+- 선택된 파일 ID 목록({", ".join(context_info.get('selectedFileIds', [])) or "지정된 ID 없음"})에 포함된 블록만 수정하세요.
+- 기본 대상 파일(있다면): {context_info.get('primarySelectedFileId') or "지정되지 않음"}
+- `/*#FILE ...*/` 헤더와 매칭되는 `/*#FILE_END*/` 마커를 반드시 그대로 유지하세요.
+- 사용자 요청이 없다면 다른 파일 ID를 새로 만들거나 수정하지 마세요.
 
 ## 응답 가이드:
 - 코드가 필요하지 않은 경우 "changes" 필드 전체를 생략

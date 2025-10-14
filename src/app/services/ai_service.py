@@ -72,7 +72,10 @@ class AIService:
                 'userCode': parsed_metadata.get('userCode', {}),
                 'pageUrl': parsed_metadata.get('pageUrl', ''),
                 'domInfo': parsed_metadata.get('domInfo', {}),
-                'current_script': parsed_metadata.get('current_script', {})  # 기존 호환성 유지
+                'current_script': parsed_metadata.get('current_script', {}),  # 기존 호환성 유지
+                'selectedFileIds': parsed_metadata.get('selectedFileIds') or [],
+                'primarySelectedFileId': parsed_metadata.get('primarySelectedFileId'),
+                'selectedFiles': parsed_metadata.get('selectedFiles') or [],
             }
             
             return context
