@@ -8,27 +8,27 @@ from typing import Dict, Any, Tuple, List, Optional
 
 MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
     # Google Gemini
-    'gemini-2.5-pro': {
-        'provider': 'google', 'provider_model': 'gemini-2.5-pro',
-        'pricing': {
-            'input': {'small_context': 1.25, 'large_context': 2.50},
-            'output': {'small_context': 10.00, 'large_context': 15.00}
-        }
-    },
-    'gemini-2.5-flash': {
-        'provider': 'google', 'provider_model': 'gemini-2.5-flash',
-        'pricing': {
-            'input': {'text_image_video': 0.30, 'audio': 1.00},
-            'output': {'all': 2.50}
-        }
-    },
-    'gemini-2.5-flash-lite': {
-        'provider': 'google', 'provider_model': 'gemini-2.5-flash-lite',
-        'pricing': {
-            'input': {'text_image_video': 0.10, 'audio': 0.30},
-            'output': {'all': 0.40}
-        }
-    },
+    # 'gemini-2.5-pro': {
+    #     'provider': 'google', 'provider_model': 'gemini-2.5-pro',
+    #     'pricing': {
+    #         'input': {'small_context': 1.25, 'large_context': 2.50},
+    #         'output': {'small_context': 10.00, 'large_context': 15.00}
+    #     }
+    # },
+    # 'gemini-2.5-flash': {
+    #     'provider': 'google', 'provider_model': 'gemini-2.5-flash',
+    #     'pricing': {
+    #         'input': {'text_image_video': 0.30, 'audio': 1.00},
+    #         'output': {'all': 2.50}
+    #     }
+    # },
+    # 'gemini-2.5-flash-lite': {
+    #     'provider': 'google', 'provider_model': 'gemini-2.5-flash-lite',
+    #     'pricing': {
+    #         'input': {'text_image_video': 0.10, 'audio': 0.30},
+    #         'output': {'all': 0.40}
+    #     }
+    # },
 
     # OpenAI
     'gpt-5': {
@@ -49,24 +49,24 @@ MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
     },
 
     # Anthropic
-    'claude-sonnet-4': {
-        'provider': 'anthropic', 'provider_model': 'claude-sonnet-4-20250514',
-        'pricing': {
-            'input': {
-                'all': 3.00, 'cache_write_5m': 3.75, 'cache_write_1h': 6.00, 'cache_hit': 0.30, 'cached': 0.30
-            },
-            'output': {'all': 15.00}
-        }
-    },
-    'claude-opus-4.1': {
-        'provider': 'anthropic', 'provider_model': 'claude-opus-4-1-20250805',
-        'pricing': {
-            'input': {
-                'all': 15.00, 'cache_write_5m': 18.75, 'cache_write_1h': 30.00, 'cache_hit': 1.50, 'cached': 1.50
-            },
-            'output': {'all': 75.00}
-        }
-    },
+    # 'claude-sonnet-4': {
+    #     'provider': 'anthropic', 'provider_model': 'claude-sonnet-4-20250514',
+    #     'pricing': {
+    #         'input': {
+    #             'all': 3.00, 'cache_write_5m': 3.75, 'cache_write_1h': 6.00, 'cache_hit': 0.30, 'cached': 0.30
+    #         },
+    #         'output': {'all': 15.00}
+    #     }
+    # },
+    # 'claude-opus-4.1': {
+    #     'provider': 'anthropic', 'provider_model': 'claude-opus-4-1-20250805',
+    #     'pricing': {
+    #         'input': {
+    #             'all': 15.00, 'cache_write_5m': 18.75, 'cache_write_1h': 30.00, 'cache_hit': 1.50, 'cached': 1.50
+    #         },
+    #         'output': {'all': 75.00}
+    #     }
+    # },
 }
 
 def get_supported_models() -> List[str]:

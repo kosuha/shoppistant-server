@@ -433,6 +433,23 @@ class AIService:
             # JSON 파싱 시도
             parsed_response = None
             changes_data = None  # changes 형식으로 통일
+
+            selected_file_ids = context_info.get('selectedFileIds') if isinstance(context_info, dict) else None
+            if not isinstance(selected_file_ids, list):
+                selected_file_ids = []
+            selected_file_ids = [str(fid) for fid in selected_file_ids if fid]
+            primary_file_id = context_info.get('primarySelectedFileId') if isinstance(context_info, dict) else None
+            primary_file_id = str(primary_file_id) if primary_file_id else None
+
+            def resolve_file_id(candidate: Optional[str]) -> Optional[str]:
+                candidate_str = str(candidate) if candidate else None
+                if candidate_str and candidate_str in selected_file_ids:
+                    return candidate_str
+                if primary_file_id and (not selected_file_ids or primary_file_id in selected_file_ids):
+                    return primary_file_id
+                if selected_file_ids:
+                    return selected_file_ids[0]
+                return candidate_str
             
             try:
                 parsed_response = json.loads(json_text)
@@ -446,9 +463,13 @@ class AIService:
                         js = changes.get('javascript') or {}
                         css = changes.get('css') or {}
                         if isinstance(js, dict) and js.get('diff'):
-                            valid_changes['javascript'] = {'diff': js['diff']}
+                            file_id = resolve_file_id(js.get('file_id'))
+                            if file_id:
+                                valid_changes['javascript'] = {'file_id': file_id, 'diff': js['diff']}
                         if isinstance(css, dict) and css.get('diff'):
-                            valid_changes['css'] = {'diff': css['diff']}
+                            file_id = resolve_file_id(css.get('file_id'))
+                            if file_id:
+                                valid_changes['css'] = {'file_id': file_id, 'diff': css['diff']}
                         if valid_changes:
                             changes_data = valid_changes
                     # JSON은 성공했으나 changes가 없을 때, message 내 코드 블록을 추출하여 changes로 변환
@@ -465,9 +486,13 @@ class AIService:
                             if code_blocks:
                                 changes_data = {}
                                 if code_blocks.get('javascript'):
-                                    changes_data['javascript'] = {'diff': code_blocks['javascript']}
+                                    file_id = resolve_file_id(None)
+                                    if file_id:
+                                        changes_data['javascript'] = {'file_id': file_id, 'diff': code_blocks['javascript']}
                                 if code_blocks.get('css'):
-                                    changes_data['css'] = {'diff': code_blocks['css']}
+                                    file_id = resolve_file_id(None)
+                                    if file_id:
+                                        changes_data['css'] = {'file_id': file_id, 'diff': code_blocks['css']}
             
             # JSON 파싱 실패 시 마크다운 코드 블록에서 changes 형식으로 변환
             except json.JSONDecodeError as e:
@@ -479,9 +504,13 @@ class AIService:
                     if code_blocks:
                         changes_data = {}
                         if code_blocks.get('javascript'):
-                            changes_data['javascript'] = {'diff': code_blocks['javascript']}
+                            file_id = resolve_file_id(None)
+                            if file_id:
+                                changes_data['javascript'] = {'file_id': file_id, 'diff': code_blocks['javascript']}
                         if code_blocks.get('css'):
-                            changes_data['css'] = {'diff': code_blocks['css']}
+                            file_id = resolve_file_id(None)
+                            if file_id:
+                                changes_data['css'] = {'file_id': file_id, 'diff': code_blocks['css']}
                 
                 # 파싱 실패 시 기본 응답 구조
                 parsed_response = {

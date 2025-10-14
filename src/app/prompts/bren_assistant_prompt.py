@@ -199,22 +199,27 @@ Return pure JSON only. Do not include code fences (```), language tags, or any e
 Allowed keys:
 - message (string, required)
 - changes (object, optional) containing:
-    - javascript.diff (string)
-    - css.diff (string)
+    - javascript (object, optional) with:
+        - file_id (string, required, must be one of {", ".join(context_info.get('selectedFileIds', [])) or "the provided file IDs"})
+        - diff (string, required)
+    - css (object, optional) with:
+        - file_id (string, required, must be one of {", ".join(context_info.get('selectedFileIds', [])) or "the provided file IDs"})
+        - diff (string, required)
 
 Respond in JSON with unified Git-style diff for both JavaScript and CSS when applicable:
 
 {{
         "message": "Explain what you're doing and why",
         "changes": {{
-                "javascript": {{ "diff": "@@ -startLine,count +startLine,count @@\\n- old line\\n+ new line" }},
-                "css": {{ "diff": "@@ -startLine,count +startLine,count @@\\n- old line\\n+ new line" }}
+                "javascript": {{ "file_id": "<one-of-selected-ids>", "diff": "@@ -startLine,count +startLine,count @@\\n- old line\\n+ new line" }},
+                "css": {{ "file_id": "<one-of-selected-ids>", "diff": "@@ -startLine,count +startLine,count @@\\n- old line\\n+ new line" }}
         }}
 }}
 
 **Rules:**
 - Return only the JSON object. No code fences, no prose.
 - Include only the language that needs changes (javascript or css or both)
+- For each language provided, set `file_id` to one of the allowed file IDs and ensure the diff targets that file.
 - Use Git diff format for precise, token-efficient modifications
 - If no changes needed for a language, omit that field entirely
 
@@ -227,6 +232,7 @@ These are examples for illustration only. Do not copy their content unless the u
     "message": "Added loading state to button click handler",
     "changes": {{
         "javascript": {{
+            "file_id": "<one-of-selected-ids>",
             "diff": "@@ -8,1 +8,3 @@\\nfunction handleClick() {{\\n-  console.log('clicked');\\n+  button.disabled = true;\\n+  button.textContent = 'Loading...';\\n+  console.log('clicked');"
         }}
     }}
@@ -237,6 +243,7 @@ These are examples for illustration only. Do not copy their content unless the u
     "message": "Added hover effects to button",
     "changes": {{
         "css": {{
+            "file_id": "<one-of-selected-ids>",
             "diff": "@@ -3,1 +3,5 @@\\n.button {{\\n  color: blue;\\n+  transition: all 0.3s ease;\\n}}\\n+\\n+.button:hover {{\\n+  background-color: blue;\\n+  color: white;\\n+}}"
         }}
     }}
@@ -247,9 +254,11 @@ These are examples for illustration only. Do not copy their content unless the u
     "message": "Added interactive button with click handler and hover effects",
     "changes": {{
         "javascript": {{
+            "file_id": "<one-of-selected-ids>",
             "diff": "@@ -0,0 +1,5 @@\\n+function handleButtonClick() {{\\n+  console.log('Button clicked!');\\n+  // Add your logic here\\n+}}"
         }},
         "css": {{
+            "file_id": "<one-of-selected-ids>",
             "diff": "@@ -1,1 +1,4 @@\\n.button {{\\n  color: blue;\\n+  cursor: pointer;\\n+  transition: all 0.2s;\\n}}"
         }}
     }}
@@ -283,22 +292,27 @@ GitHub Copilot이나 Cursor AI와 같은 AI 코딩 어시스턴트로서 사용�
 허용 키:
 - message (문자열, 필수)
 - changes (객체, 선택) 내에:
-    - javascript.diff (문자열)
-    - css.diff (문자열)
+    - javascript (객체, 선택)
+        - file_id (문자열, 필수, 선택된 파일 ID 중 하나)
+        - diff (문자열, 필수)
+    - css (객체, 선택)
+        - file_id (문자열, 필수, 선택된 파일 ID 중 하나)
+        - diff (문자열, 필수)
 
 모든 코드 관련 응답은 다음 JSON 형식을 사용하세요(해당되는 경우에만 changes 포함):
 
 {{
         "message": "수행한 작업에 대한 한국어 설명",
         "changes": {{
-                "javascript": {{ "diff": "Git diff 형식의 JavaScript 변경사항" }},
-                "css": {{ "diff": "Git diff 형식의 CSS 변경사항" }}
+                "javascript": {{ "file_id": "<선택된 ID>", "diff": "Git diff 형식의 JavaScript 변경사항" }},
+                "css": {{ "file_id": "<선택된 ID>", "diff": "Git diff 형식의 CSS 변경사항" }}
         }}
 }}
 
 **중요 규칙:**
 - JSON 객체만 반환 (코드펜스/설명 금지)
 - 변경이 필요한 언어만 포함 (javascript 또는 css 또는 둘 다)
+- 각 언어 블록에 `file_id`를 포함하고 반드시 선택한 파일 ID 중 하나와 일치시키세요.
 - 변경이 없는 언어의 필드는 완전히 생략
 - Git diff 형식: `@@ -라인번호,제거수 +라인번호,추가수 @@\\n-제거할줄\\n+추가할줄`
 - 다른 응답 형식은 절대 사용하지 마세요
@@ -310,6 +324,7 @@ GitHub Copilot이나 Cursor AI와 같은 AI 코딩 어시스턴트로서 사용�
     "message": "calculateTotal 함수에 세금 계산을 추가했습니다",
     "changes": {{
         "javascript": {{
+            "file_id": "<선택된 ID>",
             "diff": "@@ -2,1 +2,3 @@\\nfunction calculateTotal(items) {{\\n-  return items.length * 10;\\n+  const subtotal = items.length * 10;\\n+  const tax = subtotal * 0.1;\\n+  return subtotal + tax;\\n}}"
         }}
     }}
@@ -320,6 +335,7 @@ GitHub Copilot이나 Cursor AI와 같은 AI 코딩 어시스턴트로서 사용�
     "message": "버튼 클릭 핸들러를 추가했습니다",
     "changes": {{
         "javascript": {{
+            "file_id": "<선택된 ID>",
             "diff": "@@ -0,0 +1,4 @@\\n+function handleButtonClick() {{\\n+  console.log('Button clicked!');\\n+  // 로직 추가\\n+}}"
         }}
     }}
@@ -330,6 +346,7 @@ GitHub Copilot이나 Cursor AI와 같은 AI 코딩 어시스턴트로서 사용�
     "message": "버튼에 호버 효과와 트랜지션을 추가했습니다",
     "changes": {{
         "css": {{
+            "file_id": "<선택된 ID>",
             "diff": "@@ -1,3 +1,7 @@\\n.button {{\\n  color: blue;\\n  padding: 10px;\\n+  transition: all 0.3s ease;\\n+  cursor: pointer;\\n+}}\\n+\\n+.button:hover {{\\n+  background-color: blue;\\n+  color: white;\\n}}"
         }}
     }}

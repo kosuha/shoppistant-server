@@ -59,6 +59,7 @@ class AIScriptResponse(BaseModel):
 
 class CodeDiff(BaseModel):
     """코드 변경에 대한 diff 페이로드"""
+    file_id: str = Field(..., description="변경 대상 파일 ID")
     diff: str = Field(..., description="코드 변경 diff 또는 전체 코드")
 
 class ChangesPayload(BaseModel):
