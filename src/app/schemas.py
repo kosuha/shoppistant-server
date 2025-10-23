@@ -180,6 +180,8 @@ class UserMembership(BaseModel):
     membership_level: MembershipLevelType = Field(..., description="멤버십 레벨 (0:무료, 1:베이직, 2:프리미엄, 3:최상위)")
     expires_at: Optional[datetime] = Field(None, description="만료일")
     next_billing_at: Optional[datetime] = Field(None, description="다음 결제 예정일")
+    cancel_at_period_end: Optional[bool] = Field(False, description="만료 시 자동 해지 예정 여부")
+    cancel_requested_at: Optional[datetime] = Field(None, description="해지 요청 일시")
     created_at: Optional[datetime] = Field(default=None, description="생성 시간")
     updated_at: Optional[datetime] = Field(default=None, description="수정 시간")
 
@@ -190,6 +192,8 @@ class MembershipStatus(BaseModel):
     next_billing_at: Optional[datetime] = Field(None, description="다음 결제 예정일")
     is_expired: bool = Field(..., description="만료 여부")
     days_remaining: Optional[int] = Field(None, description="남은 일수")
+    cancel_at_period_end: Optional[bool] = Field(False, description="만료 시 자동 해지 예정 여부")
+    cancel_requested_at: Optional[datetime] = Field(None, description="해지 요청 일시")
 
 class MembershipUpgradeRequest(BaseModel):
     """멤버십 업그레이드 요청"""

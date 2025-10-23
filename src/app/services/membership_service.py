@@ -33,7 +33,13 @@ class MembershipService(BaseService, IMembershipService):
                 'days_remaining': self._get_days_remaining(membership),
                 'next_billing_at': membership.get('next_billing_at'),
             }
-            
+
+            # 신규 필드 기본값 보정
+            if 'cancel_at_period_end' not in result:
+                result['cancel_at_period_end'] = False
+            if 'cancel_requested_at' not in result:
+                result['cancel_requested_at'] = None
+
             return result
             
         except Exception as e:
@@ -53,9 +59,9 @@ class MembershipService(BaseService, IMembershipService):
             if target_level not in [level.value for level in MembershipLevel]:
                 raise ValueError(f"유효하지 않은 멤버십 레벨: {target_level}")
             
-            # 무료 등급으로의 다운그레이드는 별도 처리
+            # 무료 등급 요청은 만료 시점 해지 예약으로 처리
             if target_level == MembershipLevel.FREE:
-                return await self._downgrade_to_free(user_id)
+                return await self.cancel_membership(user_id)
             
             now = datetime.now(timezone.utc)
             base_time = now
@@ -80,7 +86,12 @@ class MembershipService(BaseService, IMembershipService):
             if current_membership:
                 # 업데이트
                 success = await self.db_helper.update_user_membership(
-                    user_id, target_level, expires_at, next_billing_at
+                    user_id,
+                    target_level,
+                    expires_at,
+                    next_billing_at,
+                    cancel_at_period_end=False,
+                    cancel_requested_at=None,
                 )
             else:
                 # 새로 생성
@@ -136,9 +147,20 @@ class MembershipService(BaseService, IMembershipService):
                 base_time = datetime.now()
             
             new_expires_at = base_time + timedelta(days=days)
+            next_billing_at = current_membership.get('next_billing_at')
+            if isinstance(next_billing_at, str):
+                try:
+                    next_billing_at = datetime.fromisoformat(next_billing_at.replace('Z', '+00:00'))
+                except Exception:
+                    next_billing_at = None
             
             success = await self.db_helper.update_user_membership(
-                user_id, current_level, new_expires_at, current_membership.get('next_billing_at')
+                user_id,
+                current_level,
+                new_expires_at,
+                next_billing_at,
+                cancel_at_period_end=False,
+                cancel_requested_at=None,
             )
             
             if success:
@@ -162,7 +184,11 @@ class MembershipService(BaseService, IMembershipService):
     async def check_permission(self, user_id: str, required_level: int) -> bool:
         """사용자 권한 확인"""
         return await self.db_helper.check_membership_level(user_id, required_level)
-    
+
+    async def force_downgrade_to_free(self, user_id: str) -> Dict[str, Any]:
+        """환불 등으로 즉시 무료 등급으로 전환"""
+        return await self._downgrade_to_free(user_id)
+
     async def get_membership_status(self, user_id: str) -> Dict[str, Any]:
         """멤버십 상태 상세 조회"""
         try:
@@ -180,7 +206,9 @@ class MembershipService(BaseService, IMembershipService):
                 'expires_at': expires_at,
                 'next_billing_at': next_billing_at,
                 'is_expired': self._is_membership_expired(membership),
-                'days_remaining': self._get_days_remaining(membership)
+                'days_remaining': self._get_days_remaining(membership),
+                'cancel_at_period_end': membership.get('cancel_at_period_end', False),
+                'cancel_requested_at': membership.get('cancel_requested_at'),
             }
             
             if expires_at:
@@ -239,7 +267,11 @@ class MembershipService(BaseService, IMembershipService):
         """무료 등급으로 다운그레이드"""
         try:
             success = await self.db_helper.update_user_membership(
-                user_id, MembershipLevel.FREE, None
+                user_id,
+                MembershipLevel.FREE,
+                None,
+                cancel_at_period_end=False,
+                cancel_requested_at=None,
             )
 
             if success:
@@ -256,3 +288,61 @@ class MembershipService(BaseService, IMembershipService):
         except Exception as e:
             self.logger.error(f"무료 등급 다운그레이드 실패: {e}")
             return {}
+
+    async def cancel_membership(self, user_id: str) -> Dict[str, Any]:
+        """멤버십을 만료 시점에 해지하도록 예약"""
+        try:
+            scheduled = await self.db_helper.schedule_membership_cancellation(user_id)
+            if not scheduled:
+                raise ValueError("해지할 유료 멤버십이 존재하지 않습니다")
+
+            await self.db_helper.log_system_event(
+                user_id=user_id,
+                event_type='membership_cancel_scheduled',
+                event_data={'cancel_at_period_end': True}
+            )
+
+            membership = await self.get_user_membership(user_id)
+            if not membership:
+                raise RuntimeError("멤버십 정보를 조회할 수 없습니다")
+            return membership
+        except ValueError:
+            raise
+        except Exception as e:
+            self.logger.error(f"멤버십 해지 예약 실패: {e}")
+            raise
+
+    async def resume_membership(self, user_id: str) -> Dict[str, Any]:
+        """예약된 멤버십 해지를 취소하고 유료 멤버십을 유지"""
+        try:
+            membership = await self.db_helper.get_user_membership(user_id)
+            if not membership or int(membership.get('membership_level', 0)) <= 0:
+                raise ValueError("해지 취소할 유료 멤버십이 존재하지 않습니다")
+
+            expires_at = self.db_helper._parse_iso_datetime(membership.get('expires_at'))
+            next_billing_at = self.db_helper._parse_iso_datetime(membership.get('next_billing_at'))
+
+            success = await self.db_helper.update_user_membership(
+                user_id,
+                membership_level=membership.get('membership_level', 0),
+                expires_at=expires_at,
+                next_billing_at=next_billing_at,
+                cancel_at_period_end=False,
+                cancel_requested_at=None,
+            )
+
+            if not success:
+                raise RuntimeError("멤버십 해지 취소에 실패했습니다")
+
+            await self.db_helper.log_system_event(
+                user_id=user_id,
+                event_type='membership_cancel_resumed',
+                event_data={'cancel_at_period_end': False}
+            )
+
+            return await self.get_user_membership(user_id)
+        except ValueError:
+            raise
+        except Exception as e:
+            self.logger.error(f"멤버십 해지 취소 실패: {e}")
+            raise

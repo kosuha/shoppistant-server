@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from core.responses import success_response, error_response
-from core.membership_config import MembershipConfig
+from core.membership_config import MembershipConfig, MembershipLevel
 from core.token_calculator import TokenUsageCalculator
 from schemas import (
     MembershipUpgradeRequest, 
@@ -61,9 +61,36 @@ async def list_wallet_transactions(limit: int = 20, current_user = Depends(get_c
 
 @router.post("/wallet/credit")
 async def credit_wallet(amount_usd: float, current_user = Depends(get_current_user)):
-    """테스트/운영용 크레딧 충전 엔드포인트 (권한 체크는 별도 구성 필요)"""
+    """테스트/운영용 크레딧 충전 엔드포인트 (활성 멤버십 사용자만 허용)"""
     try:
         from main import db_helper
+
+        if not membership_service:
+            logger.error("membership_service is not configured for wallet credit endpoint")
+            return error_response(message="멤버십 서비스를 사용할 수 없습니다.", error_code="MEMBERSHIP_SERVICE_UNAVAILABLE")
+
+        membership_data = await membership_service.get_user_membership(current_user.id)
+        membership_level = 0
+        membership_active = False
+        if isinstance(membership_data, dict):
+            raw_level = membership_data.get("membership_level", 0)
+            try:
+                membership_level = int(raw_level)
+            except (TypeError, ValueError):
+                membership_level = 0
+            is_expired = membership_data.get("is_expired")
+            membership_active = membership_level >= int(MembershipLevel.BASIC) and is_expired is False
+
+        if not membership_active:
+            return error_response(
+                message="활성화된 멤버십이 있는 사용자만 크레딧을 충전할 수 있습니다.",
+                error_code="MEMBERSHIP_REQUIRED",
+            )
+
+        if not db_helper:
+            logger.error("db_helper is not configured for wallet credit endpoint")
+            return error_response(message="지갑 서비스를 사용할 수 없습니다.", error_code="WALLET_SERVICE_UNAVAILABLE")
+
         res = await db_helper.credit_wallet(current_user.id, amount_usd)
         if not res:
             return error_response(message="충전에 실패했습니다", error_code="WALLET_CREDIT_FAILED")
@@ -163,15 +190,21 @@ async def upgrade_membership(
                 error_code="MEMBERSHIP_UPGRADE_FAILED"
             )
         
+        if request.target_level == 0:
+            message = "멤버십이 현재 구독 기간 종료 후 해지되도록 예약되었습니다"
+        else:
+            message = f"멤버십이 레벨 {request.target_level}로 업그레이드되었습니다"
+
         return success_response(
             data=result,
-            message=f"멤버십이 레벨 {request.target_level}로 업그레이드되었습니다"
+            message=message
         )
         
     except ValueError as e:
+        error_code = "MEMBERSHIP_CANCEL_FAILED" if request.target_level == 0 else "INVALID_MEMBERSHIP_LEVEL"
         return error_response(
             message=str(e),
-            error_code="INVALID_MEMBERSHIP_LEVEL"
+            error_code=error_code
         )
     except HTTPException:
         raise

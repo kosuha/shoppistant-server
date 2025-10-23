@@ -9,6 +9,7 @@ from . import (
     sse_router,
     thread_router,
     version_router,
+    admin_router,
 )
 
 __all__ = [
@@ -20,5 +21,6 @@ __all__ = [
     "site_router",
     "sse_router",
     "thread_router",
+    "admin_router",
     "version_router",
 ]

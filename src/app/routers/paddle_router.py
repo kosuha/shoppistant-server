@@ -129,34 +129,37 @@ def _parse_datetime(value: Any) -> Optional[datetime]:
     return None
 
 
-@router.get("/paddle")
-async def paddle_webhook_get():
-    return success_response(data={"ok": True}, message="paddle webhook alive")
-
-
-@router.post("/paddle")
-async def paddle_webhook(
-    request: Request,
-    paddle_signature: str | None = Header(default=None, alias="Paddle-Signature"),
-):
-    raw = await request.body()
-    logger.info(
-        "[PADDLE] webhook received: len=%s, has_signature=%s",
-        len(raw),
-        bool(paddle_signature),
-    )
-
-    # Verify signature (best effort)
-    if not _verify_signature(raw, paddle_signature):
-        raise HTTPException(status_code=400, detail="invalid signature")
-
-    # Parse JSON
+async def _get_services():
+    """paddle 처리에 필요한 서비스 인스턴스를 반환"""
     try:
-        payload = json.loads(raw.decode("utf-8"))
+        from app.main import membership_service as membership_service  # type: ignore
+        from app.main import db_helper as db_helper  # type: ignore
     except Exception:
-        raise HTTPException(status_code=400, detail="invalid json")
+        membership_service = None
+        db_helper = None
 
-    # Extract fields
+    if membership_service is None or db_helper is None:
+        try:
+            from core.factory import ServiceFactory
+
+            if membership_service is None:
+                membership_service = ServiceFactory.get_membership_service()
+            if db_helper is None:
+                db_helper = ServiceFactory.get_db_helper()
+        except Exception as e:  # pragma: no cover - 진단용 경로
+            logger.error("[PADDLE] service fallback acquisition failed: %s", e)
+
+    return membership_service, db_helper
+
+
+async def process_paddle_payload(
+    payload: Dict[str, Any],
+    *,
+    allow_duplicate: bool = False,
+    replay_reason: str | None = None,
+) -> Dict[str, Any]:
+    """Paddle 웹훅 페이로드를 처리하고 결과와 로깅 상태를 반환"""
+
     event_type: str = payload.get("event_type") or payload.get("eventType") or ""
     data = payload.get("data") or payload
     custom_raw = _get(data, "custom_data") or _get(data, "customData") or {}
@@ -214,7 +217,6 @@ async def paddle_webhook(
     next_billing_at = _parse_datetime(next_billing_raw)
 
     if not items:
-        # Some Paddle events wrap the transaction under "object" or similar
         items = _get(data, "object", "items", default=[]) or _get(payload, "object", "items", default=[])
 
     logger.info(
@@ -227,36 +229,53 @@ async def paddle_webhook(
         transaction_id,
     )
 
-    # Only act on completed/paid events
     et = (event_type or "").lower()
-    if not ("completed" in et or "paid" in et or "succeeded" in et):
-        return success_response(data={"skipped": True}, message="event ignored")
+    subscription_status = (_get(data, "subscription", "status") or data.get("status") or "").lower()
+    cancel_states = {"canceled", "cancelled", "inactive", "past_due", "paused"}
 
-    try:
-        from app.main import membership_service as membership_service  # type: ignore
-        from app.main import db_helper as db_helper  # type: ignore
-    except Exception:
-        membership_service = None
-        db_helper = None
+    event_category: str | None = None
+    if "refund" in et:
+        event_category = "refund"
+    elif "cancel" in et and "subscription" in et:
+        event_category = "cancellation"
+    elif "subscription.updated" in et and subscription_status in cancel_states:
+        event_category = "cancellation"
+    elif "completed" in et or "paid" in et or "succeeded" in et:
+        event_category = "payment"
 
-    if membership_service is None or db_helper is None:
-        try:
-            from core.factory import ServiceFactory
+    if event_category is None:
+        return {
+            "processed": {},
+            "event_id": event_id,
+            "event_category": None,
+            "status": "skipped",
+            "duplicate": False,
+            "skip": True,
+            "user_id": uid,
+            "user_email": email,
+            "transaction_id": transaction_id,
+            "log_recorded": False,
+        }
 
-            if membership_service is None:
-                membership_service = ServiceFactory.get_membership_service()
-            if db_helper is None:
-                db_helper = ServiceFactory.get_db_helper()
-        except Exception as e:  # pragma: no cover - diagnostic path
-            logger.error("[PADDLE] service fallback acquisition failed: %s", e)
+    membership_service, db_helper = await _get_services()
 
-    if event_id and db_helper:
+    if event_id and db_helper and not allow_duplicate:
         already_processed = await db_helper.has_processed_webhook_event("paddle", event_id)
         if already_processed:
             logger.info("[PADDLE] duplicate event ignored: %s", event_id)
-            return success_response(data={"duplicate": True}, message="event already processed")
+            return {
+                "processed": {},
+                "event_id": event_id,
+                "event_category": event_category,
+                "status": "duplicate",
+                "duplicate": True,
+                "skip": False,
+                "user_id": uid,
+                "user_email": email,
+                "transaction_id": transaction_id,
+                "log_recorded": False,
+            }
 
-    # Resolve env configuration
     price_membership = os.getenv("PADDLE_PRICE_ID_MEMBERSHIP", "")
     price_credits = os.getenv("PADDLE_PRICE_ID_CREDITS", "")
     try:
@@ -272,235 +291,400 @@ async def paddle_webhook(
     except (InvalidOperation, TypeError):
         credits_pack_size = Decimal("0")
 
-    # Dispatch items
-    membership_count = 0
-    credit_quantity = 0
-    credit_amount_usd = Decimal("0")
-    credit_amount_inferred = False
-    credit_currency_mismatch = False
-    credit_currency_codes: set[str] = set()
+    def summarize_items(items_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+        membership_total = 0
+        credit_qty = 0
+        credit_amount_total = Decimal("0")
+        credit_units_total = Decimal("0")
+        credit_amount_estimated = False
+        credit_currency_mismatch_local = False
+        credit_currency_codes_local: set[str] = set()
+        price_ids_local: list[str] = []
 
-    for it in items:
-        # Try multiple shapes for price id
-        price_id = _get(it, "price", "id") or it.get("price_id") or it.get("priceId")
-        qty_raw = it.get("quantity") or 1
-        try:
-            qty = max(0, int(qty_raw))
-        except (TypeError, ValueError):
-            qty = 0
+        for it in items_list:
+            price_id = _get(it, "price", "id") or it.get("price_id") or it.get("priceId")
+            if price_id:
+                price_ids_local.append(price_id)
 
-        if price_membership and price_id == price_membership:
-            membership_count += qty
-            continue
+            qty_raw = it.get("quantity") or 1
+            try:
+                qty = max(0, int(qty_raw))
+            except (TypeError, ValueError):
+                qty = 0
 
-        if price_credits and price_id == price_credits:
-            credit_quantity += qty
+            if price_membership and price_id == price_membership:
+                membership_total += qty
+                continue
 
-            item_currency = (
-                _get(it, "price", "currency_code")
-                or _get(it, "price", "currency")
-                or currency
-                or "USD"
-            )
-            item_currency = item_currency.upper()
-            credit_currency_codes.add(item_currency)
+            if price_credits and price_id == price_credits:
+                credit_qty += qty
 
-            totals = it.get("totals") or {}
-            raw_total = (
-                _extract_amount(totals.get("total"))
-                or _extract_amount(totals.get("grand_total"))
-                or _extract_amount(totals.get("gross"))
-                or _extract_amount(totals.get("amount"))
-                or _extract_amount(it.get("totals"))
-                or _extract_amount(it.get("total"))
-            )
+                item_currency = (
+                    _get(it, "price", "currency_code")
+                    or _get(it, "price", "currency")
+                    or currency
+                    or "USD"
+                )
+                item_currency = item_currency.upper()
+                credit_currency_codes_local.add(item_currency)
 
-            if raw_total is None:
-                unit_price_obj = _get(it, "price", "unit_price") or {}
-                raw_unit = _extract_amount(unit_price_obj)
-                if raw_unit is None:
-                    raw_unit = _extract_amount(_get(it, "price", "unit_amount"))
-                unit_dec = _to_decimal(raw_unit)
-                if unit_dec is not None:
-                    raw_total = unit_dec * qty
+                totals = it.get("totals") or {}
+                raw_total = (
+                    _extract_amount(totals.get("total"))
+                    or _extract_amount(totals.get("grand_total"))
+                    or _extract_amount(totals.get("gross"))
+                    or _extract_amount(totals.get("amount"))
+                    or _extract_amount(it.get("totals"))
+                    or _extract_amount(it.get("total"))
+                )
 
-            amount_dec = None
-            raw_total_dec = _to_decimal(raw_total)
-            if raw_total_dec is not None:
-                if item_currency == "USD":
-                    amount_dec = (raw_total_dec / Decimal(100)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                elif credits_unit_price > 0 and qty > 0:
-                    amount_dec = (credits_unit_price * Decimal(qty)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                    credit_amount_inferred = True
-                    logger.info(
-                        "[PADDLE] non-USD currency %s detected; inferred USD amount using configuration (event %s)",
-                        item_currency,
-                        event_id,
-                    )
+                if raw_total is None:
+                    unit_price_obj = _get(it, "price", "unit_price") or {}
+                    raw_unit = _extract_amount(unit_price_obj)
+                    if raw_unit is None:
+                        raw_unit = _extract_amount(_get(it, "price", "unit_amount"))
+                    unit_dec = _to_decimal(raw_unit)
+                    if unit_dec is not None:
+                        raw_total = unit_dec * qty
+
+                amount_dec = None
+                raw_total_dec = _to_decimal(raw_total)
+                if raw_total_dec is not None:
+                    if item_currency == "USD":
+                        amount_dec = (raw_total_dec / Decimal(100)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    elif credits_unit_price > 0 and qty > 0:
+                        amount_dec = (credits_unit_price * Decimal(qty)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                        credit_amount_estimated = True
+                        logger.info(
+                            "[PADDLE] non-USD currency %s detected; inferred USD amount using configuration (event %s)",
+                            item_currency,
+                            event_id,
+                        )
+                    else:
+                        credit_currency_mismatch_local = True
+                        logger.error(
+                            "[PADDLE] unsupported currency for credits: %s (event %s)",
+                            item_currency,
+                            event_id,
+                        )
+
+                if amount_dec is not None:
+                    credit_amount_total += amount_dec
+
+                if credits_pack_size > 0 and credit_qty > 0:
+                    credit_units_total = Decimal(credit_qty) * credits_pack_size
                 else:
-                    credit_currency_mismatch = True
-                    logger.error(
-                        "[PADDLE] unsupported currency for credits: %s (event %s)",
-                        item_currency,
-                        event_id,
-                    )
+                    credit_units_total += Decimal(credit_qty)
 
-            if amount_dec is None and qty > 0:
-                if credits_unit_price > 0:
-                    amount_dec = (credits_unit_price * Decimal(qty)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                    credit_amount_inferred = True
-                else:
-                    amount_dec = Decimal("0")
+        return {
+            "membership_count": membership_total,
+            "credit_quantity": credit_qty,
+            "credit_amount_usd": credit_amount_total,
+            "credit_units": credit_units_total,
+            "credit_amount_estimated": credit_amount_estimated,
+            "credit_currency_mismatch": credit_currency_mismatch_local,
+            "credit_currency_codes": sorted(credit_currency_codes_local),
+            "price_ids": price_ids_local,
+        }
 
-            if amount_dec is not None:
-                credit_amount_usd += amount_dec
+    summary = summarize_items(items)
+    membership_count = summary["membership_count"]
+    credit_quantity = summary["credit_quantity"]
+    credit_amount_usd = summary["credit_amount_usd"]
+    credit_units_total = summary["credit_units"]
+    credit_amount_inferred = summary["credit_amount_estimated"]
+    credit_currency_mismatch = summary["credit_currency_mismatch"]
+    credit_currency_codes = summary["credit_currency_codes"]
 
-    if credit_amount_inferred:
-        logger.warning(
-            "[PADDLE] credit amount inferred from unit price configuration for event %s",
-            event_id,
-        )
-
-    if credit_currency_mismatch:
-        logger.error(
-            "[PADDLE] credit processing blocked due to unsupported currency (event %s)",
-            event_id,
-        )
-
-    # Prepare results structure and log item mapping summary
     results: Dict[str, Any] = {}
 
     logger.info(
-        "[PADDLE] mapped items summary: membership_count=%s credit_quantity=%s custom_keys=%s price_ids=%s",
+        "[PADDLE] summary membership=%s credits=%s amount=%s price_ids=%s category=%s",
         membership_count,
         credit_quantity,
-        sorted(custom.keys()),
-        [
-            _get(it, "price", "id") or it.get("price_id") or it.get("priceId")
-            for it in items
-        ],
+        credit_amount_usd,
+        summary["price_ids"],
+        event_category,
     )
 
-    # No mapped items, just ACK (and record event for idempotency)
-    if membership_count == 0 and credit_quantity == 0:
-        logger.info("[PADDLE] interim results payload: %s", results)
-        if event_id and db_helper:
-            await db_helper.record_webhook_event(
-                "paddle",
-                event_id,
-                "acknowledged",
-                {"reason": "no mapped items"},
-            )
-        return success_response(data={"ok": True}, message="no mapped items; acknowledged")
+    if event_category == "payment":
+        if membership_count == 0 and credit_quantity == 0:
+            results.setdefault("info", "no mapped items")
 
-    # Identify user
-    user_id = uid
-    if not user_id and email:
-        # Optional: resolve user by email via Supabase admin (skipped here)
-        logger.warning("[PADDLE] uid missing; email resolution not implemented")
+        if membership_count > 0:
+            if not uid:
+                results["membership"] = {"success": False, "reason": "missing_user"}
+            elif not membership_service:
+                results["membership"] = {"success": False, "reason": "service_unavailable"}
+            else:
+                try:
+                    res = await membership_service.upgrade_membership(  # type: ignore[attr-defined]
+                        user_id=uid,
+                        target_level=1,
+                        duration_days=30 * membership_count,
+                        next_billing_at=next_billing_at,
+                    )
+                    res_data = res if isinstance(res, dict) else {}
+                    results["membership"] = {
+                        "success": bool(res_data),
+                        "data": res_data,
+                    }
+                    if not res_data:
+                        results["membership"]["error"] = "membership_update_failed"
+                except Exception as e:
+                    logger.error(f"[PADDLE] membership update failed: {e}")
+                    results["membership"] = {"success": False, "error": "membership_update_failed"}
 
-    results: Dict[str, Any] = {}
-    # Membership activation/extension: assume 30 days per unit
-    if membership_count > 0 and membership_service and user_id:
-        try:
-            res = await membership_service.upgrade_membership(
-                user_id=user_id,
-                target_level=1,
-                duration_days=30 * membership_count,
-                next_billing_at=next_billing_at,
-            )
-            res_data = res if isinstance(res, dict) else {}
-            results["membership"] = {
-                "success": bool(res_data),
-                "data": res_data,
+        if credit_quantity > 0:
+            credit_result: Dict[str, Any] = {
+                "credit_units": float(credit_units_total) if credit_units_total else 0,
+                "credit_packs": credit_quantity,
+                "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
+                "inferred": credit_amount_inferred,
+                "currencies": sorted(credit_currency_codes) if credit_currency_codes else [],
+                "success": False,
             }
-        except Exception as e:
-            logger.error(f"[PADDLE] membership update failed: {e}")
-            results["membership"] = {"success": False}
-    elif membership_count > 0 and not user_id:
-        results["membership"] = {"success": False, "reason": "missing_user"}
-    elif membership_count > 0 and not membership_service:
-        results["membership"] = {"success": False, "reason": "service_unavailable"}
 
-    # Credits top-up: credit wallet using configured USD-to-credit conversion
-    if credit_quantity > 0:
-        credits_to_grant: Optional[Decimal] = None
-        if credit_quantity > 0 and credits_pack_size > 0:
-            try:
-                credits_to_grant = (Decimal(credit_quantity) * credits_pack_size).quantize(
-                    Decimal("0.0001"),
-                    rounding=ROUND_HALF_UP,
-                )
-            except (InvalidOperation, TypeError, ValueError):
-                credits_to_grant = None
-        if credits_to_grant is None and credit_amount_usd and credit_amount_usd > 0 and credits_unit_price > 0:
-            try:
-                credits_to_grant = (credit_amount_usd / credits_unit_price).quantize(
-                    Decimal("0.0001"),
-                    rounding=ROUND_HALF_UP,
-                )
-            except (InvalidOperation, TypeError, ValueError):
-                credits_to_grant = None
-        if credits_to_grant is None and credit_quantity > 0:
-            credits_to_grant = Decimal(credit_quantity)
+            if credit_currency_mismatch:
+                credit_result["error"] = "unsupported_currency"
+            elif not uid:
+                credit_result["error"] = "missing_user"
+            elif not membership_service:
+                credit_result["error"] = "service_unavailable"
+            elif not db_helper:
+                credit_result["error"] = "service_unavailable"
+            else:
+                membership_data: Optional[Dict[str, Any]] = None
+                try:
+                    membership_data = await membership_service.get_user_membership(uid)  # type: ignore[attr-defined]
+                except Exception as membership_err:
+                    logger.error("[PADDLE] membership lookup failed for credits: %s", membership_err)
 
-        credit_result: Dict[str, Any] = {
-            "quantity": float(credits_to_grant) if credits_to_grant is not None else credit_quantity,
-            "credit_packs": credit_quantity,
-            "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
-            "inferred": credit_amount_inferred,
-            "currencies": sorted(credit_currency_codes) if credit_currency_codes else [],
-            "success": False,
-        }
+                membership_level = 0
+                membership_active = False
+                if isinstance(membership_data, dict):
+                    raw_level = membership_data.get("membership_level", 0)
+                    try:
+                        membership_level = int(raw_level)
+                    except (TypeError, ValueError):
+                        membership_level = 0
+                    is_expired = membership_data.get("is_expired")
+                    membership_active = membership_level > 0 and is_expired is False
 
-        if credit_currency_mismatch:
-            credit_result["error"] = "unsupported_currency"
-        elif not user_id:
-            credit_result["error"] = "missing_user"
-        elif not db_helper:
-            credit_result["error"] = "service_unavailable"
+                if not membership_active:
+                    credit_result["error"] = "membership_required"
+                    logger.warning(
+                        "[PADDLE] credit purchase blocked - membership inactive (event %s, uid=%s, level=%s)",
+                        event_id,
+                        uid,
+                        membership_level,
+                    )
+                else:
+                    try:
+                        credit_metadata = {
+                            "provider": "paddle",
+                            "event_id": event_id,
+                            "transaction_id": transaction_id,
+                            "quantity": credit_quantity,
+                            "pack_size": float(credits_pack_size) if credits_pack_size else None,
+                            "credits_granted": float(credit_units_total) if credit_units_total else 0,
+                            "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
+                            "inferred": credit_amount_inferred,
+                            "currencies": sorted(credit_currency_codes) if credit_currency_codes else None,
+                        }
+                        tx = await db_helper.credit_wallet(  # type: ignore
+                            uid,
+                            float(credit_units_total) if credit_units_total else float(credit_quantity),
+                            metadata=credit_metadata,
+                            source_event_id=event_id,
+                        )
+                        credit_result["success"] = bool(tx)
+                        credit_result["transaction_recorded"] = bool(tx)
+                    except Exception as e:
+                        logger.error(f"[PADDLE] wallet credit failed: {e}")
+                        credit_result["error"] = "credit_failed"
+
+            results["credits"] = credit_result
+
+    elif event_category == "refund":
+        if membership_count > 0:
+            if not uid:
+                results["membership_refund"] = {"success": False, "reason": "missing_user"}
+            elif not membership_service:
+                results["membership_refund"] = {"success": False, "reason": "service_unavailable"}
+            else:
+                try:
+                    res = await membership_service.force_downgrade_to_free(uid)  # type: ignore[attr-defined]
+                    success = bool(res)
+                    results["membership_refund"] = {
+                        "success": success,
+                        "data": res if success else None,
+                    }
+                    if not success:
+                        results["membership_refund"]["error"] = "downgrade_failed"
+                except Exception as e:
+                    logger.error(f"[PADDLE] membership refund handling failed: {e}")
+                    results["membership_refund"] = {"success": False, "error": "internal_error"}
+
+        if credit_quantity > 0:
+            credit_result = {
+                "credit_units": float(credit_units_total) if credit_units_total else 0,
+                "credit_packs": credit_quantity,
+                "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
+                "inferred": credit_amount_inferred,
+                "currencies": sorted(credit_currency_codes) if credit_currency_codes else [],
+                "success": False,
+            }
+
+            if credit_currency_mismatch:
+                credit_result["error"] = "unsupported_currency"
+            elif not uid:
+                credit_result["error"] = "missing_user"
+            elif not db_helper:
+                credit_result["error"] = "service_unavailable"
+            else:
+                try:
+                    debit_metadata = {
+                        "provider": "paddle",
+                        "event_id": event_id,
+                        "transaction_id": transaction_id,
+                        "quantity": credit_quantity,
+                        "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
+                        "credits_reversed": float(credit_units_total) if credit_units_total else 0,
+                        "inferred": credit_amount_inferred,
+                        "currencies": sorted(credit_currency_codes) if credit_currency_codes else None,
+                    }
+                    tx = await db_helper.debit_wallet(  # type: ignore
+                        uid,
+                        float(credit_units_total) if credit_units_total else float(credit_quantity),
+                        metadata=debit_metadata,
+                        source_event_id=event_id,
+                    )
+                    credit_result["success"] = bool(tx)
+                    credit_result["transaction_recorded"] = bool(tx)
+                except Exception as e:
+                    logger.error(f"[PADDLE] wallet debit failed: {e}")
+                    credit_result["error"] = "debit_failed"
+
+            results["credits_refund"] = credit_result
+
+    elif event_category == "cancellation":
+        cancel_effective_raw = (
+            _get(data, "cancellation_effective_date")
+            or _get(data, "effective_date")
+            or _get(data, "effective_at")
+            or _get(data, "subscription", "cancellation_effective_date")
+            or _get(data, "subscription", "cancelled_at")
+            or _get(data, "subscription", "ended_at")
+        )
+        cancel_effective_at = _parse_datetime(cancel_effective_raw)
+        now_utc = datetime.now(timezone.utc)
+
+        if not uid:
+            results["cancellation"] = {"success": False, "reason": "missing_user"}
+        elif not membership_service:
+            results["cancellation"] = {"success": False, "reason": "service_unavailable"}
         else:
             try:
-                credit_float = float(credits_to_grant) if credits_to_grant is not None else float(credit_amount_usd)
-                credit_metadata = {
-                    "provider": "paddle",
-                    "event_id": event_id,
-                    "transaction_id": transaction_id,
-                    "quantity": credit_quantity,
-                    "pack_size": float(credits_pack_size) if credits_pack_size else None,
-                    "credits_granted": credit_float,
-                    "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
-                    "inferred": credit_amount_inferred,
-                    "currencies": sorted(credit_currency_codes) if credit_currency_codes else None,
+                if cancel_effective_at and cancel_effective_at <= now_utc:
+                    res = await membership_service.force_downgrade_to_free(uid)  # type: ignore[attr-defined]
+                    success = bool(res)
+                    action = "downgraded"
+                else:
+                    res = await membership_service.cancel_membership(uid)  # type: ignore[attr-defined]
+                    success = bool(res)
+                    action = "scheduled"
+                results["cancellation"] = {
+                    "success": success,
+                    "action": action,
+                    "effective_at": cancel_effective_at.isoformat() if cancel_effective_at else None,
+                    "data": res if success else None,
                 }
-                tx = await db_helper.credit_wallet(  # type: ignore
-                    user_id,
-                    credit_float,
-                    metadata=credit_metadata,
-                    source_event_id=event_id,
-                )
-                credit_result["success"] = bool(tx)
-                credit_result["transaction_recorded"] = bool(tx)
+                if not success:
+                    results["cancellation"]["error"] = "membership_not_found"
+            except ValueError as e:
+                results["cancellation"] = {"success": False, "error": str(e), "action": "not_applicable"}
             except Exception as e:
-                logger.error(f"[PADDLE] wallet credit failed: {e}")
-                credit_result["error"] = "credit_failed"
+                logger.error(f"[PADDLE] cancellation handling failed: {e}")
+                results["cancellation"] = {"success": False, "error": "internal_error"}
 
-        results["credits"] = credit_result
+    status_label = "replayed" if allow_duplicate else "processed"
 
-    logger.info("[PADDLE] interim results payload: %s", results)
+    payload_data: Dict[str, Any] = {
+        "transaction_id": transaction_id,
+        "membership_units": membership_count,
+        "credit_quantity": credit_quantity,
+        "credit_amount_usd": float(credit_amount_usd) if isinstance(credit_amount_usd, Decimal) else credit_amount_usd,
+        "credit_units": float(credit_units_total) if isinstance(credit_units_total, Decimal) else credit_units_total,
+        "next_billing_at": next_billing_at.isoformat() if next_billing_at else None,
+        "event_category": event_category,
+        "results": results,
+        "user_id": uid,
+        "user_email": email,
+        "raw_payload": payload,
+        "currency": currency,
+        "price_ids": summary["price_ids"],
+    }
 
+    if replay_reason:
+        payload_data["replay_reason"] = replay_reason
+
+    log_recorded = False
     if event_id and db_helper:
-        await db_helper.record_webhook_event(
+        log_recorded = await db_helper.record_webhook_event(
             "paddle",
             event_id,
-            "processed",
-            {
-                "transaction_id": transaction_id,
-                "membership_units": membership_count,
-                "credit_quantity": credit_quantity,
-                "next_billing_at": next_billing_at.isoformat() if next_billing_at else None,
-                "results": results,
-            },
+            status_label,
+            payload_data,
         )
 
-    return success_response(data={"processed": results}, message="paddle webhook processed")
+    return {
+        "processed": results,
+        "event_id": event_id,
+        "event_category": event_category,
+        "status": status_label,
+        "duplicate": False,
+        "skip": False,
+        "user_id": uid,
+        "user_email": email,
+        "transaction_id": transaction_id,
+        "log_recorded": log_recorded,
+    }
+
+
+@router.get("/paddle")
+async def paddle_webhook_get():
+    return success_response(data={"ok": True}, message="paddle webhook alive")
+
+
+@router.post("/paddle")
+async def paddle_webhook(
+    request: Request,
+    paddle_signature: str | None = Header(default=None, alias="Paddle-Signature"),
+):
+    raw = await request.body()
+    logger.info(
+        "[PADDLE] webhook received: len=%s, has_signature=%s",
+        len(raw),
+        bool(paddle_signature),
+    )
+
+    # Verify signature (best effort)
+    if not _verify_signature(raw, paddle_signature):
+        raise HTTPException(status_code=400, detail="invalid signature")
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json")
+
+    outcome = await process_paddle_payload(payload)
+
+    if outcome.get("skip"):
+        logger.info("[PADDLE] event ignored by category")
+        return success_response(data={"skipped": True}, message="event ignored")
+
+    if outcome.get("duplicate"):
+        return success_response(data=outcome, message="event already processed")
+
+    return success_response(data=outcome, message="paddle webhook processed")
