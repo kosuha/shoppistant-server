@@ -32,7 +32,6 @@ from database_helper import DatabaseHelper
 from routers import auth_router, site_router, script_router, thread_router, sse_router, membership_router
 from routers import paddle_router, public_router
 from routers import version_router
-from routers import admin_router
 
 # 로깅 설정
 logging.basicConfig(
@@ -184,9 +183,6 @@ thread_router.get_current_user = get_current_user
 # 멤버십 라우터 의존성 설정 (멤버십 서비스만 설정, get_current_user는 직접 정의됨)
 membership_router.set_dependencies(None, membership_service)
 
-# 관리자 라우터 의존성 설정 (auth/membership/db 헬퍼 주입)
-admin_router.set_dependencies(auth_service, membership_service, db_helper)
-
 # 기본 엔드포인트
 @app.get("/")
 async def root():
@@ -233,7 +229,6 @@ app.include_router(script_router.module_router)  # 스크립트 모듈 제공용
 app.include_router(thread_router.router)
 app.include_router(sse_router.router)  # 실시간 메시지 상태 스트리밍
 app.include_router(membership_router.router)  # 멤버십 관리 라우터
-app.include_router(admin_router.router)  # 관리자 전용 라우터
 app.include_router(version_router.router)  # 버전 관리 라우터
 app.include_router(paddle_router.router)  # Paddle 웹훅 라우터
 app.include_router(public_router.router)  # 공개 API 라우터
