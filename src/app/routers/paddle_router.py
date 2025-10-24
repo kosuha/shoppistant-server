@@ -217,7 +217,8 @@ async def process_paddle_payload(
     next_billing_at = _parse_datetime(next_billing_raw)
 
     subscription_id = (
-        _get(data, "subscription", "id")
+        _get(data, "subscription_id")
+        or _get(data, "subscription", "id")
         or _get(payload, "subscription", "id")
         or _get(data, "object", "subscription_id")
         or _get(payload, "object", "subscription_id")
