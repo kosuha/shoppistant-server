@@ -433,10 +433,32 @@ async def process_paddle_payload(
                         paddle_subscription_id=subscription_id,
                     )
                     res_data = res if isinstance(res, dict) else {}
+                    resubscribe_detected = bool(res_data.get("resubscribe_detected"))
+                    if resubscribe_detected:
+                        previous_subscription_id = res_data.pop("previous_subscription_id", None)
+                        previous_subscription_status = res_data.pop("previous_subscription_status", None)
+                        cancel_flags_cleared = res_data.pop("cancel_flags_cleared", None)
+                        status_check_correlation_id = res_data.pop("status_check_correlation_id", None)
+                        res_data.pop("resubscribe_detected", None)
+
                     results["membership"] = {
                         "success": bool(res_data),
                         "data": res_data,
                     }
+                    if resubscribe_detected:
+                        results["membership"]["resubscribe_detected"] = True
+                        resubscribe_info = {}
+                        if previous_subscription_id:
+                            resubscribe_info["previous_subscription_id"] = previous_subscription_id
+                        if previous_subscription_status:
+                            resubscribe_info["previous_subscription_status"] = previous_subscription_status
+                        if cancel_flags_cleared is not None:
+                            resubscribe_info["cancel_flags_cleared"] = cancel_flags_cleared
+                        if status_check_correlation_id:
+                            resubscribe_info["status_check_correlation_id"] = status_check_correlation_id
+                        if resubscribe_info:
+                            resubscribe_info["subscription_id"] = subscription_id
+                            results["membership"]["resubscribe"] = resubscribe_info
                     if not res_data:
                         results["membership"]["error"] = "membership_update_failed"
                 except Exception as e:

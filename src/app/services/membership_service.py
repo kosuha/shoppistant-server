@@ -4,7 +4,8 @@
 """
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
+from uuid import uuid4
 
 from core.interfaces import IDatabaseHelper, IMembershipService
 from core.base_service import BaseService
@@ -19,6 +20,123 @@ class MembershipService(BaseService, IMembershipService):
     def __init__(self, db_helper: IDatabaseHelper, paddle_client: PaddleBillingClient | None = None):
         super().__init__(db_helper)
         self.paddle_client = paddle_client
+
+    async def _record_membership_error(
+        self,
+        *,
+        user_id: str,
+        action: str,
+        error: Exception,
+        subscription_id: Optional[str] = None,
+        trigger_source: Optional[str] = None,
+    ) -> str:
+        """Paddle 연동 관련 실패 정보를 로그 및 시스템 로그에 기록"""
+
+        correlation_id = uuid4().hex
+        error_type = "paddle_api" if isinstance(error, PaddleAPIError) else "unexpected"
+        event_payload: Dict[str, Any] = {
+            "correlation_id": correlation_id,
+            "action": action,
+            "error_type": error_type,
+            "message": str(error),
+        }
+
+        if isinstance(error, PaddleAPIError):
+            event_payload.update(
+                {
+                    "status_code": error.status_code,
+                    "paddle_code": error.code,
+                    "payload": error.payload,
+                }
+            )
+
+        if subscription_id:
+            event_payload["subscription_id"] = subscription_id
+        if trigger_source:
+            event_payload["trigger_source"] = trigger_source
+
+        self.logger.error(
+            "멤버십 작업 실패: action=%s user_id=%s correlation_id=%s error=%s",
+            action,
+            user_id,
+            correlation_id,
+            error,
+        )
+
+        try:
+            await self.db_helper.log_system_event(
+                user_id=user_id,
+                event_type=f"{action}_failed",
+                event_data=event_payload,
+            )
+        except Exception as log_error:  # pragma: no cover - 로깅 실패는 치명적이지 않음
+            self.logger.warning(
+                "시스템 로그 기록 실패: action=%s correlation_id=%s error=%s",
+                action,
+                correlation_id,
+                log_error,
+            )
+
+        return correlation_id
+
+    def _build_support_detail(self, correlation_id: str, error: Exception) -> str:
+        """사용자 안내 메시지에 포함할 지원 코드와 세부 정보를 생성"""
+
+        parts: List[str] = [f"지원 코드: {correlation_id}"]
+        if isinstance(error, PaddleAPIError):
+            if getattr(error, "status_code", None):
+                parts.append(f"status={error.status_code}")
+            if getattr(error, "code", None):
+                parts.append(f"code={error.code}")
+            message = str(error)
+            if message:
+                parts.append(message)
+        else:
+            message = str(error)
+            if message:
+                parts.append(message)
+
+        return " | ".join(parts)
+    
+    async def _fetch_subscription_status(
+        self,
+        user_id: str,
+        subscription_id: str,
+        *,
+        trigger_source: str,
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """이전 Paddle 구독 상태를 조회해 중복 청구 여부를 점검"""
+
+        if not self.paddle_client:
+            return None, None
+
+        try:
+            payload = await self.paddle_client.get_subscription(subscription_id)
+        except PaddleAPIError as api_error:
+            correlation_id = await self._record_membership_error(
+                user_id=user_id,
+                action="subscription_status_check",
+                error=api_error,
+                subscription_id=subscription_id,
+                trigger_source=trigger_source,
+            )
+            return None, correlation_id
+        except Exception as exc:  # pragma: no cover - 방어적 경로
+            correlation_id = await self._record_membership_error(
+                user_id=user_id,
+                action="subscription_status_check",
+                error=exc,
+                subscription_id=subscription_id,
+                trigger_source=trigger_source,
+            )
+            return None, correlation_id
+
+        status_raw = payload.get("status") if isinstance(payload, dict) else None
+        if isinstance(status_raw, str):
+            return status_raw.lower(), None
+        if status_raw is None:
+            return None, None
+        return str(status_raw).lower(), None
     
     async def get_user_membership(self, user_id: str) -> Dict[str, Any]:
         """사용자 멤버십 정보 조회"""
@@ -151,6 +269,17 @@ class MembershipService(BaseService, IMembershipService):
             now = datetime.now(timezone.utc)
             base_time = now
 
+            normalized_subscription_id: Optional[str]
+            if isinstance(paddle_subscription_id, str):
+                normalized_subscription_id = paddle_subscription_id.strip() or None
+            else:
+                normalized_subscription_id = paddle_subscription_id
+
+            resubscribe_detected = False
+            previous_subscription_status: Optional[str] = None
+            status_check_correlation_id: Optional[str] = None
+            cancel_flags_were_set = False
+
             # 기존 멤버십 조회
             current_membership = await self.db_helper.get_user_membership(user_id)
 
@@ -167,9 +296,64 @@ class MembershipService(BaseService, IMembershipService):
                     except Exception as parse_err:
                         self.logger.warning(f"기존 만료일 파싱 실패: {parse_err}")
 
-                current_subscription_id = current_membership.get('paddle_subscription_id')
+                raw_subscription = current_membership.get('paddle_subscription_id')
+                if isinstance(raw_subscription, str):
+                    raw_subscription = raw_subscription.strip() or None
+                current_subscription_id = raw_subscription
+
+                cancel_flags_were_set = bool(
+                    current_membership.get('cancel_at_period_end')
+                    or current_membership.get('cancel_requested_at')
+                )
+
+                if (
+                    normalized_subscription_id
+                    and current_subscription_id
+                    and normalized_subscription_id != current_subscription_id
+                ):
+                    resubscribe_detected = True
+                    self.logger.info(
+                        "Paddle 구독 ID 갱신 감지: user_id=%s previous=%s → new=%s",
+                        user_id,
+                        current_subscription_id,
+                        normalized_subscription_id,
+                    )
+                    previous_subscription_status, status_check_correlation_id = await self._fetch_subscription_status(
+                        user_id,
+                        current_subscription_id,
+                        trigger_source="upgrade_membership",
+                    )
+                    if previous_subscription_status and previous_subscription_status not in {
+                        "canceled",
+                        "cancelled",
+                        "ended",
+                        "inactive",
+                    }:
+                        self.logger.warning(
+                            "이전 Paddle 구독이 활성 상태로 남아 있을 수 있습니다: user_id=%s subscription_id=%s status=%s",
+                            user_id,
+                            current_subscription_id,
+                            previous_subscription_status,
+                        )
+                    event_payload = {
+                        "previous_subscription_id": current_subscription_id,
+                        "new_subscription_id": normalized_subscription_id,
+                        "previous_subscription_status": previous_subscription_status,
+                        "cancel_flags_were_set": cancel_flags_were_set,
+                    }
+                    if status_check_correlation_id:
+                        event_payload["status_check_correlation_id"] = status_check_correlation_id
+                    try:
+                        await self.db_helper.log_system_event(
+                            user_id=user_id,
+                            event_type="membership_subscription_resubscribe_detected",
+                            event_data=event_payload,
+                        )
+                    except Exception as log_error:  # pragma: no cover - 로깅 실패 무시
+                        self.logger.warning(f"재구독 로그 기록 실패: {log_error}")
 
             expires_at = base_time + timedelta(days=duration_days)
+            target_subscription_id = normalized_subscription_id or current_subscription_id
 
             if current_membership:
                 # 업데이트
@@ -180,7 +364,7 @@ class MembershipService(BaseService, IMembershipService):
                     next_billing_at,
                     cancel_at_period_end=False,
                     cancel_requested_at=None,
-                    paddle_subscription_id=paddle_subscription_id or current_subscription_id,
+                    paddle_subscription_id=target_subscription_id,
                 )
             else:
                 # 새로 생성
@@ -191,27 +375,46 @@ class MembershipService(BaseService, IMembershipService):
                     next_billing_at,
                     cancel_at_period_end=False,
                     cancel_requested_at=None,
-                    paddle_subscription_id=paddle_subscription_id or current_subscription_id,
+                    paddle_subscription_id=target_subscription_id,
                 )
                 success = bool(membership)
             
             if success:
                 # 업그레이드 로그 기록
+                event_data = {
+                    'from_level': current_membership.get('membership_level', 0) if current_membership else 0,
+                    'to_level': target_level,
+                    'duration_days': duration_days,
+                    'expires_at': expires_at.isoformat(),
+                    'next_billing_at': next_billing_at.isoformat() if next_billing_at else None,
+                    'paddle_subscription_id': target_subscription_id,
+                }
+                if resubscribe_detected:
+                    event_data.update({
+                        'resubscribe_detected': True,
+                        'previous_subscription_id': current_subscription_id,
+                        'previous_subscription_status': previous_subscription_status,
+                        'cancel_flags_reset': cancel_flags_were_set,
+                    })
+                    if status_check_correlation_id:
+                        event_data['status_check_correlation_id'] = status_check_correlation_id
+
                 await self.db_helper.log_system_event(
                     user_id=user_id,
                     event_type='membership_upgrade',
-                    event_data={
-                        'from_level': current_membership.get('membership_level', 0) if current_membership else 0,
-                        'to_level': target_level,
-                        'duration_days': duration_days,
-                        'expires_at': expires_at.isoformat(),
-                        'next_billing_at': next_billing_at.isoformat() if next_billing_at else None,
-                        'paddle_subscription_id': paddle_subscription_id or current_subscription_id,
-                    }
+                    event_data=event_data
                 )
                 
                 # 업데이트된 멤버십 정보 반환
-                return await self.get_user_membership(user_id)
+                membership_data = await self.get_user_membership(user_id)
+                if isinstance(membership_data, dict) and resubscribe_detected:
+                    membership_data['resubscribe_detected'] = True
+                    membership_data['previous_subscription_id'] = current_subscription_id
+                    membership_data['previous_subscription_status'] = previous_subscription_status
+                    membership_data['cancel_flags_cleared'] = cancel_flags_were_set
+                    if status_check_correlation_id:
+                        membership_data['status_check_correlation_id'] = status_check_correlation_id
+                return membership_data
             else:
                 raise Exception("멤버십 업데이트 실패")
                 
@@ -388,6 +591,8 @@ class MembershipService(BaseService, IMembershipService):
 
     async def cancel_membership(self, user_id: str, trigger_source: str = "user") -> Dict[str, Any]:
         """멤버십을 만료 시점에 해지하도록 예약"""
+        subscription_id: Optional[str] = None
+
         try:
             membership = await self.db_helper.get_user_membership(user_id)
             if not membership or int(membership.get('membership_level', 0)) <= 0:
@@ -404,11 +609,23 @@ class MembershipService(BaseService, IMembershipService):
                     try:
                         await self.paddle_client.cancel_subscription(subscription_id, effective_from="next_billing_period")
                     except PaddleAPIError as e:
-                        self.logger.error(f"Paddle 구독 해지 API 실패: {e} (status={e.status_code})")
-                        raise RuntimeError("결제 구독 해지 요청에 실패했습니다. 잠시 후 다시 시도해주세요.") from e
+                        correlation_id = await self._record_membership_error(
+                            user_id=user_id,
+                            action="membership_cancel",
+                            error=e,
+                            subscription_id=subscription_id,
+                            trigger_source=trigger_source,
+                        )
+                        raise RuntimeError(self._build_support_detail(correlation_id, e)) from e
                     except Exception as e:  # pragma: no cover - 예외 처리 보강
-                        self.logger.error(f"Paddle 구독 해지 API 예기치 못한 오류: {e}")
-                        raise RuntimeError("결제 구독 해지 중 오류가 발생했습니다") from e
+                        correlation_id = await self._record_membership_error(
+                            user_id=user_id,
+                            action="membership_cancel",
+                            error=e,
+                            subscription_id=subscription_id,
+                            trigger_source=trigger_source,
+                        )
+                        raise RuntimeError(self._build_support_detail(correlation_id, e)) from e
                 else:
                     self.logger.warning("Paddle 구독 ID가 없어 API 해지를 건너뜁니다 (user_id=%s)", user_id)
 
@@ -429,11 +646,19 @@ class MembershipService(BaseService, IMembershipService):
         except ValueError:
             raise
         except Exception as e:
-            self.logger.error(f"멤버십 해지 예약 실패: {e}")
-            raise
+            correlation_id = await self._record_membership_error(
+                user_id=user_id,
+                action="membership_cancel",
+                error=e,
+                subscription_id=subscription_id,
+                trigger_source=trigger_source,
+            )
+            raise RuntimeError(self._build_support_detail(correlation_id, e)) from e
 
     async def resume_membership(self, user_id: str) -> Dict[str, Any]:
         """예약된 멤버십 해지를 취소하고 유료 멤버십을 유지"""
+        subscription_id: Optional[str] = None
+
         try:
             membership = await self.db_helper.get_user_membership(user_id)
             if not membership or int(membership.get('membership_level', 0)) <= 0:
@@ -452,11 +677,21 @@ class MembershipService(BaseService, IMembershipService):
                 try:
                     await self.paddle_client.resume_subscription(subscription_id)
                 except PaddleAPIError as e:
-                    self.logger.error(f"Paddle 구독 해지 예약 해제 실패: {e} (status={e.status_code})")
-                    raise RuntimeError("결제 구독 해지 예약을 취소하지 못했습니다. 잠시 후 다시 시도해주세요.") from e
+                    correlation_id = await self._record_membership_error(
+                        user_id=user_id,
+                        action="membership_resume",
+                        error=e,
+                        subscription_id=subscription_id,
+                    )
+                    raise RuntimeError(self._build_support_detail(correlation_id, e)) from e
                 except Exception as e:  # pragma: no cover
-                    self.logger.error(f"Paddle 구독 재개 API 예기치 못한 오류: {e}")
-                    raise RuntimeError("결제 구독 재개 중 오류가 발생했습니다") from e
+                    correlation_id = await self._record_membership_error(
+                        user_id=user_id,
+                        action="membership_resume",
+                        error=e,
+                        subscription_id=subscription_id,
+                    )
+                    raise RuntimeError(self._build_support_detail(correlation_id, e)) from e
 
             success = await self.db_helper.update_user_membership(
                 user_id,
@@ -480,5 +715,10 @@ class MembershipService(BaseService, IMembershipService):
         except ValueError:
             raise
         except Exception as e:
-            self.logger.error(f"멤버십 해지 취소 실패: {e}")
-            raise
+            correlation_id = await self._record_membership_error(
+                user_id=user_id,
+                action="membership_resume",
+                error=e,
+                subscription_id=subscription_id,
+            )
+            raise RuntimeError(self._build_support_detail(correlation_id, e)) from e

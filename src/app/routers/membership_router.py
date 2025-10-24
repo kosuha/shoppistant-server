@@ -384,6 +384,12 @@ async def upgrade_membership(
             message=str(e),
             error_code=error_code
         )
+    except RuntimeError as e:
+        logger.error(f"멤버십 업그레이드 실패(RuntimeError): {e}")
+        return error_response(
+            message=str(e),
+            error_code="MEMBERSHIP_UPGRADE_ERROR"
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -469,6 +475,12 @@ async def resume_membership(current_user = Depends(get_current_user)):
         return error_response(
             message=str(e),
             error_code="MEMBERSHIP_RESUME_NOT_ALLOWED",
+        )
+    except RuntimeError as e:
+        logger.error(f"멤버십 해지 예약 해제 실패(RuntimeError): {e}")
+        return error_response(
+            message=str(e),
+            error_code="MEMBERSHIP_RESUME_ERROR",
         )
     except HTTPException:
         raise
