@@ -442,55 +442,6 @@ async def extend_membership(
             error_code="MEMBERSHIP_EXTEND_ERROR"
         )
 
-
-@router.post("/resume", response_model=MembershipResponse)
-async def resume_membership(current_user = Depends(get_current_user)):
-    """만료 시 해지 예약된 멤버십을 유지하도록 복구"""
-    try:
-        if not current_user:
-            raise HTTPException(status_code=401, detail="인증이 필요합니다")
-
-        if not membership_service:
-            logger.error("membership_service is not configured for resume endpoint")
-            return error_response(
-                message="멤버십 서비스를 사용할 수 없습니다.",
-                error_code="MEMBERSHIP_SERVICE_UNAVAILABLE",
-            )
-
-        user_id = current_user.id
-        result = await membership_service.resume_membership(user_id)
-
-        if not result:
-            return error_response(
-                message="멤버십 해지를 취소하지 못했습니다",
-                error_code="MEMBERSHIP_RESUME_FAILED",
-            )
-
-        return success_response(
-            data=result,
-            message="멤버십 해지 예약이 해제되었습니다",
-        )
-
-    except ValueError as e:
-        return error_response(
-            message=str(e),
-            error_code="MEMBERSHIP_RESUME_NOT_ALLOWED",
-        )
-    except RuntimeError as e:
-        logger.error(f"멤버십 해지 예약 해제 실패(RuntimeError): {e}")
-        return error_response(
-            message=str(e),
-            error_code="MEMBERSHIP_RESUME_ERROR",
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"멤버십 해지 예약 해제 실패: {e}")
-        return error_response(
-            message="멤버십 해지 예약 해제 중 오류가 발생했습니다",
-            error_code="MEMBERSHIP_RESUME_ERROR",
-        )
-
 @router.get("/check/{required_level}")
 async def check_membership_permission(
     required_level: int,
