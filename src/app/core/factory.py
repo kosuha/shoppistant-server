@@ -18,6 +18,7 @@ from services.website_service import WebsiteService
 from services.ai_service import AIService
 from services.thread_service import ThreadService
 from services.membership_service import MembershipService
+from services.paddle_billing_client import PaddleBillingClient
 from services.llm_providers.langchain_manager import LangChainLLMManager
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,15 @@ class ServiceFactory:
         container.register_singleton(SyncClient, supabase_client)
         container.register_singleton(genai.Client, gemini_client)
         container.register_singleton(LangChainLLMManager, lc_manager)
+
+        # Paddle Billing API 클라이언트 설정
+        paddle_api_key = getattr(settings, "PADDLE_API_KEY", None)
+        paddle_base_url = getattr(settings, "PADDLE_API_BASE_URL", "https://api.paddle.com")
+        if paddle_api_key:
+            paddle_client = PaddleBillingClient(api_key=paddle_api_key, base_url=paddle_base_url)
+            container.register_singleton(PaddleBillingClient, paddle_client)
+        else:
+            logger.warning("[PADDLE] PADDLE_API_KEY가 설정되지 않아 PaddleBillingClient를 초기화하지 않습니다.")
 
         # DatabaseHelper 싱글톤 등록
         db_helper = DatabaseHelper(supabase_client, supabase_admin)
@@ -120,3 +130,11 @@ class ServiceFactory:
     def get_membership_service() -> IMembershipService:
         """멤버십 서비스 조회"""
         return container.get(IMembershipService)
+
+    @staticmethod
+    def get_paddle_billing_client() -> PaddleBillingClient | None:
+        """Paddle Billing 클라이언트 조회"""
+        try:
+            return container.get(PaddleBillingClient)
+        except ValueError:
+            return None

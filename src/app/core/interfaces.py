@@ -80,8 +80,20 @@ class IDatabaseHelper(ABC):
         pass
     
     @abstractmethod
-    async def log_system_event(self, event_type: str, event_data: Dict[str, Any], user_id: str = None):
+    async def log_system_event(
+        self,
+        user_id: str = None,
+        event_type: str = 'info',
+        event_data: Optional[Dict[str, Any]] = None,
+        ip_address: str = None,
+        user_agent: str = None,
+    ) -> bool:
         """시스템 이벤트 로깅"""
+        pass
+
+    @abstractmethod
+    async def update_membership_subscription_id(self, user_id: str, subscription_id: str) -> bool:
+        """사용자 멤버십의 Paddle 구독 ID 업데이트"""
         pass
 
 class IMembershipService(ABC):
@@ -99,6 +111,7 @@ class IMembershipService(ABC):
         target_level: int,
         duration_days: int = 30,
         next_billing_at: Optional[datetime] = None,
+        paddle_subscription_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """멤버십 업그레이드"""
         pass
@@ -121,4 +134,14 @@ class IMembershipService(ABC):
     @abstractmethod
     async def batch_cleanup_expired_memberships(self) -> Dict[str, Any]:
         """만료된 멤버십 일괄 정리"""
+        pass
+
+    @abstractmethod
+    async def sync_paddle_subscription(
+        self,
+        user_id: str,
+        subscription_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """사용자 멤버십에 Paddle 구독 ID를 동기화"""
         pass

@@ -9,14 +9,16 @@ from typing import Dict, Any, Optional, List
 from core.interfaces import IDatabaseHelper, IMembershipService
 from core.base_service import BaseService
 from core.membership_config import MembershipLevel
+from services.paddle_billing_client import PaddleBillingClient, PaddleAPIError
 
 logger = logging.getLogger(__name__)
 
 class MembershipService(BaseService, IMembershipService):
     """멤버십 관리 서비스"""
     
-    def __init__(self, db_helper: IDatabaseHelper):
+    def __init__(self, db_helper: IDatabaseHelper, paddle_client: PaddleBillingClient | None = None):
         super().__init__(db_helper)
+        self.paddle_client = paddle_client
     
     async def get_user_membership(self, user_id: str) -> Dict[str, Any]:
         """사용자 멤버십 정보 조회"""
@@ -45,6 +47,88 @@ class MembershipService(BaseService, IMembershipService):
         except Exception as e:
             self.logger.error(f"멤버십 조회 실패: {e}")
             return None
+
+    async def sync_paddle_subscription(
+        self,
+        user_id: str,
+        subscription_id: str,
+        metadata: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Paddle 구독 ID를 사용자 멤버십과 동기화"""
+
+        if not subscription_id or not subscription_id.strip():
+            raise ValueError("유효한 Paddle 구독 ID가 필요합니다")
+
+        subscription_id = subscription_id.strip()
+        meta_payload = metadata or {}
+        result: Dict[str, Any] = {
+            "subscription_id": subscription_id,
+            "updated": False,
+            "created": False,
+            "status": "noop",
+        }
+
+        try:
+            membership = await self.db_helper.get_user_membership(user_id)
+            if membership:
+                result["membership"] = membership
+                current_id = membership.get("paddle_subscription_id")
+                if current_id == subscription_id:
+                    result["status"] = "unchanged"
+                else:
+                    updated = await self.db_helper.update_membership_subscription_id(user_id, subscription_id)
+                    result["updated"] = bool(updated)
+                    result["status"] = "updated" if updated else "update_failed"
+            else:
+                created = await self.db_helper.create_user_membership(
+                    user_id,
+                    membership_level=0,
+                    expires_at=None,
+                    next_billing_at=None,
+                    cancel_at_period_end=False,
+                    cancel_requested_at=None,
+                    paddle_subscription_id=subscription_id,
+                )
+                result["created"] = bool(created)
+                result["updated"] = bool(created)
+                result["status"] = "created" if created else "create_failed"
+                if created:
+                    result["membership"] = created
+
+            if result.get("updated"):
+                refreshed = await self.db_helper.get_user_membership(user_id)
+                if refreshed:
+                    result["membership"] = refreshed
+
+            await self.db_helper.log_system_event(
+                user_id=user_id,
+                event_type="membership_subscription_sync",
+                event_data={
+                    "subscription_id": subscription_id,
+                    "metadata": meta_payload,
+                    "status": result["status"],
+                    "updated": result["updated"],
+                    "created": result["created"],
+                },
+            )
+
+            return result
+        except Exception as e:
+            self.logger.error(f"Paddle 구독 동기화 실패: {e}")
+            await self.db_helper.log_system_event(
+                user_id=user_id,
+                event_type="membership_subscription_sync_error",
+                event_data={
+                    "subscription_id": subscription_id,
+                    "metadata": meta_payload,
+                    "error": str(e),
+                },
+            )
+            return {
+                "status": "error",
+                "subscription_id": subscription_id,
+                "error": str(e),
+            }
     
     async def upgrade_membership(
         self,
@@ -52,6 +136,7 @@ class MembershipService(BaseService, IMembershipService):
         target_level: int,
         duration_days: int = 30,
         next_billing_at: datetime | None = None,
+        paddle_subscription_id: str | None = None,
     ) -> Dict[str, Any]:
         """멤버십 업그레이드"""
         try:
@@ -69,6 +154,7 @@ class MembershipService(BaseService, IMembershipService):
             # 기존 멤버십 조회
             current_membership = await self.db_helper.get_user_membership(user_id)
 
+            current_subscription_id = None
             if current_membership:
                 current_expires = current_membership.get('expires_at')
                 if current_expires:
@@ -81,6 +167,8 @@ class MembershipService(BaseService, IMembershipService):
                     except Exception as parse_err:
                         self.logger.warning(f"기존 만료일 파싱 실패: {parse_err}")
 
+                current_subscription_id = current_membership.get('paddle_subscription_id')
+
             expires_at = base_time + timedelta(days=duration_days)
 
             if current_membership:
@@ -92,11 +180,18 @@ class MembershipService(BaseService, IMembershipService):
                     next_billing_at,
                     cancel_at_period_end=False,
                     cancel_requested_at=None,
+                    paddle_subscription_id=paddle_subscription_id or current_subscription_id,
                 )
             else:
                 # 새로 생성
                 membership = await self.db_helper.create_user_membership(
-                    user_id, target_level, expires_at, next_billing_at
+                    user_id,
+                    target_level,
+                    expires_at,
+                    next_billing_at,
+                    cancel_at_period_end=False,
+                    cancel_requested_at=None,
+                    paddle_subscription_id=paddle_subscription_id or current_subscription_id,
                 )
                 success = bool(membership)
             
@@ -111,6 +206,7 @@ class MembershipService(BaseService, IMembershipService):
                         'duration_days': duration_days,
                         'expires_at': expires_at.isoformat(),
                         'next_billing_at': next_billing_at.isoformat() if next_billing_at else None,
+                        'paddle_subscription_id': paddle_subscription_id or current_subscription_id,
                     }
                 )
                 
@@ -272,6 +368,7 @@ class MembershipService(BaseService, IMembershipService):
                 None,
                 cancel_at_period_end=False,
                 cancel_requested_at=None,
+                paddle_subscription_id=None,
             )
 
             if success:
@@ -289,9 +386,32 @@ class MembershipService(BaseService, IMembershipService):
             self.logger.error(f"무료 등급 다운그레이드 실패: {e}")
             return {}
 
-    async def cancel_membership(self, user_id: str) -> Dict[str, Any]:
+    async def cancel_membership(self, user_id: str, trigger_source: str = "user") -> Dict[str, Any]:
         """멤버십을 만료 시점에 해지하도록 예약"""
         try:
+            membership = await self.db_helper.get_user_membership(user_id)
+            if not membership or int(membership.get('membership_level', 0)) <= 0:
+                raise ValueError("해지할 유료 멤버십이 존재하지 않습니다")
+
+            subscription_id = membership.get('paddle_subscription_id')
+
+            if trigger_source != "webhook" and not self.paddle_client:
+                self.logger.error("Paddle API 클라이언트가 구성되지 않아 해지를 진행할 수 없습니다 (user_id=%s)", user_id)
+                raise RuntimeError("결제 연동 설정이 누락되어 해지를 완료할 수 없습니다. 관리자에게 문의해주세요.")
+
+            if trigger_source != "webhook" and self.paddle_client:
+                if subscription_id:
+                    try:
+                        await self.paddle_client.cancel_subscription(subscription_id, effective_from="next_billing_period")
+                    except PaddleAPIError as e:
+                        self.logger.error(f"Paddle 구독 해지 API 실패: {e} (status={e.status_code})")
+                        raise RuntimeError("결제 구독 해지 요청에 실패했습니다. 잠시 후 다시 시도해주세요.") from e
+                    except Exception as e:  # pragma: no cover - 예외 처리 보강
+                        self.logger.error(f"Paddle 구독 해지 API 예기치 못한 오류: {e}")
+                        raise RuntimeError("결제 구독 해지 중 오류가 발생했습니다") from e
+                else:
+                    self.logger.warning("Paddle 구독 ID가 없어 API 해지를 건너뜁니다 (user_id=%s)", user_id)
+
             scheduled = await self.db_helper.schedule_membership_cancellation(user_id)
             if not scheduled:
                 raise ValueError("해지할 유료 멤버십이 존재하지 않습니다")
@@ -321,6 +441,22 @@ class MembershipService(BaseService, IMembershipService):
 
             expires_at = self.db_helper._parse_iso_datetime(membership.get('expires_at'))
             next_billing_at = self.db_helper._parse_iso_datetime(membership.get('next_billing_at'))
+
+            subscription_id = membership.get('paddle_subscription_id')
+
+            if membership.get('cancel_at_period_end') and not self.paddle_client:
+                self.logger.error("Paddle API 클라이언트가 구성되지 않아 해지 예약을 취소할 수 없습니다 (user_id=%s)", user_id)
+                raise RuntimeError("결제 연동 설정이 누락되어 해지 예약을 취소하지 못했습니다. 관리자에게 문의해주세요.")
+
+            if self.paddle_client and subscription_id and membership.get('cancel_at_period_end'):
+                try:
+                    await self.paddle_client.resume_subscription(subscription_id)
+                except PaddleAPIError as e:
+                    self.logger.error(f"Paddle 구독 해지 예약 해제 실패: {e} (status={e.status_code})")
+                    raise RuntimeError("결제 구독 해지 예약을 취소하지 못했습니다. 잠시 후 다시 시도해주세요.") from e
+                except Exception as e:  # pragma: no cover
+                    self.logger.error(f"Paddle 구독 재개 API 예기치 못한 오류: {e}")
+                    raise RuntimeError("결제 구독 재개 중 오류가 발생했습니다") from e
 
             success = await self.db_helper.update_user_membership(
                 user_id,

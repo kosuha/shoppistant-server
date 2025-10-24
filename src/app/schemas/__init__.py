@@ -195,6 +195,17 @@ class MembershipStatus(BaseModel):
     cancel_at_period_end: Optional[bool] = Field(False, description="만료 시 자동 해지 예정 여부")
     cancel_requested_at: Optional[datetime] = Field(None, description="해지 요청 일시")
 
+class MembershipSubscriptionSyncRequest(BaseModel):
+    """프런트엔드에서 구독 동기화를 요청할 때 사용하는 모델"""
+
+    subscription_id: Optional[str] = Field(None, description="Paddle subscription.id 값")
+    checkout_id: Optional[str] = Field(None, description="Paddle checkout.id 값")
+    product: Optional[str] = Field(None, description="구매한 제품 종류 (membership/credits)")
+    price_ids: Optional[List[str]] = Field(default=None, description="Checkout에서 사용된 가격 ID 목록")
+    items: Optional[List[Dict[str, Any]]] = Field(default=None, description="Checkout items 데이터")
+    attempt_id: Optional[str] = Field(None, description="클라이언트에서 생성한 결제 시도 ID")
+    source: Optional[str] = Field(None, description="결제 요청 소스 식별자")
+
 class MembershipUpgradeRequest(BaseModel):
     """멤버십 업그레이드 요청"""
     target_level: MembershipLevelType = Field(..., description="목표 멤버십 레벨")

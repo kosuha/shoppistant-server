@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     DEBUG_HTTP_LOGS: bool = False
     # 로그 최대 길이(문자). 0 또는 음수면 무제한(잘라내지 않음)
     DEBUG_HTTP_LOGS_MAXLEN: int = 0
+
+    # Paddle Billing 설정
+    PADDLE_API_KEY: Optional[str] = None
+    PADDLE_API_BASE_URL: str = "https://api.paddle.com"
+    PADDLE_PRODUCT_ID_MEMBERSHIP: Optional[str] = None
+    PADDLE_PRODUCT_ID_CREDITS: Optional[str] = None
+    PADDLE_PRICE_ID_MEMBERSHIP: Optional[str] = None
+    PADDLE_PRICE_ID_CREDITS: Optional[str] = None
     
     @validator('SUPABASE_URL')
     def validate_supabase_url(cls, v):

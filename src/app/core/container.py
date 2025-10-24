@@ -1,9 +1,10 @@
-"""
-의존성 주입 컨테이너
-"""
-from typing import TypeVar, Type, Optional, Dict, Any, Union
+"""의존성 주입 컨테이너"""
+from typing import Any, Dict, Type, TypeVar, Union, get_args, get_origin
+from types import UnionType
 import inspect
-from functools import lru_cache
+
+
+_OPTIONAL_UNRESOLVED = object()
 
 T = TypeVar('T')
 
@@ -46,7 +47,8 @@ class DIContainer:
                 self._singletons[interface] = instance
             return self._singletons[interface]
             
-        raise ValueError(f"Service {interface.__name__} not registered")
+        interface_name = getattr(interface, "__name__", repr(interface))
+        raise ValueError(f"Service {interface_name} not registered")
     
     def clear_cache(self) -> None:
         """캐시된 싱글톤 인스턴스 정리 (테스트용)"""
@@ -67,20 +69,9 @@ class DIContainer:
             param_type = param.annotation
             if param_type != inspect.Parameter.empty:
                 try:
-                    # Optional 타입 처리
-                    if hasattr(param_type, '__origin__') and param_type.__origin__ is Union:
-                        # Optional[T] = Union[T, None]
-                        args = param_type.__args__
-                        if len(args) == 2 and type(None) in args:
-                            # Optional 타입에서 실제 타입 추출
-                            actual_type = next(arg for arg in args if arg != type(None))
-                            try:
-                                kwargs[param_name] = self.get(actual_type)
-                            except ValueError:
-                                # Optional이므로 None 허용
-                                kwargs[param_name] = None
-                        else:
-                            kwargs[param_name] = self.get(param_type)
+                    if self._is_union_type(param_type):
+                        resolved = self._resolve_union_dependency(param_type)
+                        kwargs[param_name] = None if resolved is _OPTIONAL_UNRESOLVED else resolved
                     else:
                         kwargs[param_name] = self.get(param_type)
                 except ValueError:
@@ -88,8 +79,41 @@ class DIContainer:
                         kwargs[param_name] = param.default
                     else:
                         raise ValueError(f"Cannot resolve dependency {param_type} for {service_class.__name__}")
-                        
+
         return service_class(**kwargs)
+
+    @staticmethod
+    def _is_union_type(annotation: Any) -> bool:
+        origin = get_origin(annotation)
+        if origin in (Union, UnionType):
+            return True
+        if origin is None and isinstance(annotation, UnionType):  # pragma: no cover - 방어적 처리
+            return True
+        return False
+
+    def _resolve_union_dependency(self, annotation: Any) -> Any:
+        args = get_args(annotation)
+        if not args:
+            raise ValueError(f"Cannot resolve union dependency for {annotation}")
+
+        non_none_args = [arg for arg in args if arg is not type(None)]
+
+        # Optional[T] 형태: T만 시도, 실패하면 None 허용
+        if len(non_none_args) == 1 and len(non_none_args) != len(args):
+            actual_type = non_none_args[0]
+            try:
+                return self.get(actual_type)
+            except ValueError:
+                return _OPTIONAL_UNRESOLVED
+
+        # 일반 Union: 첫 번째로 해결 가능한 타입을 선택
+        for candidate in non_none_args or args:
+            try:
+                return self.get(candidate)
+            except ValueError:
+                continue
+
+        raise ValueError(f"Cannot resolve union dependency for {annotation}")
 
 # 전역 컨테이너 인스턴스
 container = DIContainer()

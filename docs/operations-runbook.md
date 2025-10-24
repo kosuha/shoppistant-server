@@ -29,13 +29,14 @@
 - `main.py`에서 `membership_service` 및 `db_helper`가 초기화되었는지 로깅 확인
 
 ### 2.2 멤버십 해지 요청
-1. 고객이 웹 UI에서 해지를 진행하면 Paddle Billing이 즉시 구독 상태를 `canceled`로 변경  
-2. Webhook이 `cancel_at_period_end=True`로 저장되었는지 확인  
+1. 고객이 웹 UI에서 해지를 진행하면 서버가 `PADDLE_API_KEY`를 사용해 `POST /subscriptions/{id}/cancel` API를 호출한다. 호출 성공 시 Paddle 구독이 `canceled` 상태로 전환된다.  
+2. 같은 요청 흐름에서 `user_memberships` 레코드가 `cancel_at_period_end=true`, `cancel_requested_at=<now>`로 업데이트된다.  
 3. 만료일까지는 혜택 유지, 만료일 경과 후 자동 `force_downgrade_to_free`
 
-수동 해지 필요 시:
-- Paddle Dashboard에서 `Cancel Subscription` 실행  
-- `Supabase`의 `user_memberships` 테이블에서 `cancel_at_period_end`를 `true`로 직접 업데이트 (예외 케이스)
+장애 대응 체크리스트:
+- API 호출 실패 시 사용자는 해지 에러를 보게 된다. 서버 로그에서 `[PADDLE] API request failed` 메시지를 확인하고 `PADDLE_API_KEY`, `PADDLE_API_BASE_URL` 환경변수를 검증한다.  
+- Paddle Dashboard에서 `Cancel Subscription`을 수동 실행한 뒤 `system_logs`에 수기 메모를 남긴다.  
+- Supabase `user_memberships`에서 `cancel_at_period_end`를 수동 보정해야 하는 경우, API 호출 성공 여부를 먼저 확인한다.
 
 ### 2.3 환불 처리
 1. Paddle에서 환불 실행 (부분 환불은 현재 비지원)  
@@ -65,6 +66,7 @@
 | --- | --- | --- | --- |
 | Webhook 장애 | Paddle 결제 성공했지만 멤버십 미반영 | Paddle Dashboard에서 이벤트 재전송, 서버 로그 확인 | 로그 파일 보관, `system_logs`에 수동 이벤트 추가 |
 | Paddle Price ID 변경 | 체크아웃에서 `configuration` 오류 | `.env`의 `PADDLE_PRICE_ID_*` 업데이트 | 배포 후 S1~S3 테스트 재수행 |
+| Paddle Product ID 변경 | 결제 승인 후 멤버십/크레딧 미지급 | `.env`의 `PADDLE_PRODUCT_ID_*` 업데이트 | 신규 결제 흐름 수동 확인 |
 | Supabase 연결 실패 | 모든 결제 처리 실패, `service_unavailable` | 데이터베이스 연결 상태 확인, 필요 시 재부팅 | 장애 리포트 작성 및 재발 방지책 검토 |
 
 ---

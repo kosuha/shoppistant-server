@@ -819,6 +819,7 @@ class DatabaseHelper:
         next_billing_at: datetime = None,
         cancel_at_period_end: bool = False,
         cancel_requested_at: datetime | None = None,
+        paddle_subscription_id: str | None = None,
     ) -> Dict[str, Any]:
         """새로운 사용자 멤버십 생성"""
         try:
@@ -830,6 +831,9 @@ class DatabaseHelper:
                 'cancel_at_period_end': cancel_at_period_end,
                 'cancel_requested_at': cancel_requested_at.isoformat() if cancel_requested_at else None,
             }
+
+            if paddle_subscription_id:
+                membership_data['paddle_subscription_id'] = paddle_subscription_id
             
             client = self._get_client(use_admin=True)
             result = client.table('user_memberships').insert(membership_data).execute()
@@ -849,6 +853,7 @@ class DatabaseHelper:
         next_billing_at: datetime = None,
         cancel_at_period_end: Any = UNSET,
         cancel_requested_at: Any = UNSET,
+        paddle_subscription_id: Any = UNSET,
     ) -> bool:
         """사용자 멤버십 업데이트"""
         try:
@@ -869,6 +874,9 @@ class DatabaseHelper:
                     else cancel_requested_at
                 )
 
+            if paddle_subscription_id is not UNSET:
+                update_data['paddle_subscription_id'] = paddle_subscription_id
+
             client = self._get_client(use_admin=True)
             result = client.table('user_memberships').update(update_data).eq('user_id', user_id).execute()
             
@@ -879,6 +887,21 @@ class DatabaseHelper:
                 return False
         except Exception as e:
             logger.error(f"사용자 멤버십 업데이트 실패: {e}")
+            return False
+
+    async def update_membership_subscription_id(self, user_id: str, subscription_id: str) -> bool:
+        """사용자 멤버십의 Paddle 구독 ID 업데이트"""
+        try:
+            update_data = {
+                'paddle_subscription_id': subscription_id,
+                'updated_at': datetime.now().isoformat(),
+            }
+
+            client = self._get_client(use_admin=True)
+            result = client.table('user_memberships').update(update_data).eq('user_id', user_id).execute()
+            return bool(result.data)
+        except Exception as e:
+            logger.error(f"Paddle 구독 ID 업데이트 실패: {e}")
             return False
 
     async def ensure_user_membership(self, user_id: str) -> Dict[str, Any]:

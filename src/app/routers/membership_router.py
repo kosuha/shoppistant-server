@@ -3,6 +3,8 @@
 사용자 멤버십 조회, 업그레이드, 연장 등의 엔드포인트 제공
 """
 import logging
+from typing import Any, Dict, List
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -10,12 +12,14 @@ from core.responses import success_response, error_response
 from core.membership_config import MembershipConfig, MembershipLevel
 from core.token_calculator import TokenUsageCalculator
 from schemas import (
-    MembershipUpgradeRequest, 
+    MembershipUpgradeRequest,
     MembershipExtendRequest,
     MembershipResponse,
     MembershipStatusResponse,
-    BatchCleanupResult
+    BatchCleanupResult,
+    MembershipSubscriptionSyncRequest,
 )
+from services.paddle_billing_client import PaddleAPIError
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +39,58 @@ def set_dependencies(user_dependency, membership_svc):
     """의존성 설정 (main.py에서 호출)"""
     global membership_service
     membership_service = membership_svc
+
+
+def _get_nested(data: Dict[str, Any], *keys: str) -> Any:
+    cur: Any = data
+    for key in keys:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+
+def _extract_price_ids(items: List[Dict[str, Any]]) -> List[str]:
+    price_ids: List[str] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        candidate = None
+        price = item.get("price")
+        if isinstance(price, dict):
+            candidate = price.get("id") or price.get("price_id") or price.get("priceId")
+        if not candidate:
+            candidate = item.get("price_id") or item.get("priceId")
+        if candidate:
+            price_ids.append(str(candidate))
+    # 고유값 유지 (순서 보존)
+    seen: Dict[str, bool] = {}
+    unique = []
+    for pid in price_ids:
+        if pid not in seen:
+            seen[pid] = True
+            unique.append(pid)
+    return unique
+
+
+def _summarize_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    summary: List[Dict[str, Any]] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        price = item.get("price") if isinstance(item.get("price"), dict) else None
+        price_id = None
+        if isinstance(price, dict):
+            price_id = price.get("id") or price.get("price_id") or price.get("priceId")
+        if not price_id:
+            price_id = item.get("price_id") or item.get("priceId")
+        summary.append(
+            {
+                "price_id": str(price_id) if price_id else None,
+                "quantity": item.get("quantity"),
+            }
+        )
+    return summary
 
 @router.get("/wallet")
 async def get_wallet(current_user = Depends(get_current_user)):
@@ -165,6 +221,128 @@ async def get_membership_status(
             error_code="MEMBERSHIP_STATUS_ERROR"
         )
 
+
+@router.post("/subscription/sync")
+async def sync_membership_subscription(
+    request: MembershipSubscriptionSyncRequest,
+    current_user = Depends(get_current_user),
+):
+    """Paddle Checkout 완료 직후 구독 ID를 미리 저장"""
+
+    if not current_user:
+        raise HTTPException(status_code=401, detail="인증이 필요합니다")
+
+    if not membership_service:
+        logger.error("membership_service is not configured for subscription sync")
+        return error_response(
+            message="멤버십 서비스를 사용할 수 없습니다.",
+            error_code="MEMBERSHIP_SERVICE_UNAVAILABLE",
+        )
+
+    from main import db_helper, paddle_client
+
+    user_id = current_user.id
+    subscription_id = (request.subscription_id or "").strip() or None
+    checkout_id = (request.checkout_id or "").strip() or None
+
+    resolved_from: str | None = "payload" if subscription_id else None
+    lookup_error: Dict[str, Any] | None = None
+
+    if not subscription_id and checkout_id:
+        if paddle_client is None:
+            lookup_error = {"reason": "paddle_client_unavailable"}
+        else:
+            try:
+                checkout = await paddle_client.get_checkout(checkout_id)
+                subscription_id = (
+                    _get_nested(checkout, "subscription", "id")
+                    or _get_nested(checkout, "data", "subscription", "id")
+                    or _get_nested(checkout, "data", "subscription_id")
+                    or _get_nested(checkout, "checkout", "subscription_id")
+                )
+                if subscription_id:
+                    subscription_id = str(subscription_id)
+                    resolved_from = "checkout_lookup"
+                else:
+                    lookup_error = {"reason": "subscription_missing_in_checkout"}
+            except PaddleAPIError as exc:
+                lookup_error = {
+                    "reason": "paddle_api_error",
+                    "code": exc.code,
+                    "message": str(exc),
+                    "status": exc.status_code,
+                }
+            except Exception as exc:
+                lookup_error = {"reason": "unexpected_error", "message": str(exc)}
+
+    price_ids = request.price_ids or []
+    if not price_ids and request.items:
+        price_ids = _extract_price_ids(request.items)
+
+    item_summary = _summarize_items(request.items or []) if request.items else []
+
+    metadata = {
+        "product": request.product,
+        "checkout_id": checkout_id,
+        "price_ids": price_ids,
+        "items": item_summary,
+        "attempt_id": request.attempt_id,
+        "source": request.source or "web",
+        "resolved_from": resolved_from,
+    }
+    if lookup_error:
+        metadata["lookup_error"] = lookup_error
+
+    if not subscription_id:
+        if db_helper:
+            try:
+                await db_helper.log_system_event(
+                    user_id=user_id,
+                    event_type="membership_subscription_sync_pending",
+                    event_data=metadata,
+                )
+            except Exception as exc:  # pragma: no cover - 로깅 실패 무시
+                logger.warning(f"subscription sync pending log failed: {exc}")
+
+        return success_response(
+            data={
+                "synced": False,
+                "subscription_id": None,
+                "needs_webhook": True,
+                "resolved_from": resolved_from,
+                "lookup_error": lookup_error,
+            },
+            message="구독 ID를 확인할 수 없어 웹훅 처리를 대기합니다.",
+        )
+
+    try:
+        sync_result = await membership_service.sync_paddle_subscription(  # type: ignore[attr-defined]
+            user_id=user_id,
+            subscription_id=subscription_id,
+            metadata=metadata,
+        )
+    except ValueError as exc:
+        return error_response(message=str(exc), error_code="INVALID_SUBSCRIPTION_ID")
+    except Exception as exc:
+        logger.error(f"멤버십 구독 동기화 실패: {exc}")
+        return error_response(
+            message="구독 정보를 동기화하지 못했습니다",
+            error_code="SUBSCRIPTION_SYNC_FAILED",
+        )
+
+    synced = sync_result.get("status") not in {"error", "update_failed", "create_failed"}
+
+    return success_response(
+        data={
+            "synced": synced,
+            "subscription_id": subscription_id,
+            "resolved_from": resolved_from,
+            "lookup_error": lookup_error,
+            "result": sync_result,
+        },
+        message="Paddle 구독 정보가 동기화되었습니다." if synced else "구독 정보 동기화 결과를 확인하세요.",
+    )
+
 @router.post("/upgrade", response_model=MembershipResponse)
 async def upgrade_membership(
     request: MembershipUpgradeRequest,
@@ -256,6 +434,49 @@ async def extend_membership(
         return error_response(
             message="멤버십 연장 중 오류가 발생했습니다",
             error_code="MEMBERSHIP_EXTEND_ERROR"
+        )
+
+
+@router.post("/resume", response_model=MembershipResponse)
+async def resume_membership(current_user = Depends(get_current_user)):
+    """만료 시 해지 예약된 멤버십을 유지하도록 복구"""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="인증이 필요합니다")
+
+        if not membership_service:
+            logger.error("membership_service is not configured for resume endpoint")
+            return error_response(
+                message="멤버십 서비스를 사용할 수 없습니다.",
+                error_code="MEMBERSHIP_SERVICE_UNAVAILABLE",
+            )
+
+        user_id = current_user.id
+        result = await membership_service.resume_membership(user_id)
+
+        if not result:
+            return error_response(
+                message="멤버십 해지를 취소하지 못했습니다",
+                error_code="MEMBERSHIP_RESUME_FAILED",
+            )
+
+        return success_response(
+            data=result,
+            message="멤버십 해지 예약이 해제되었습니다",
+        )
+
+    except ValueError as e:
+        return error_response(
+            message=str(e),
+            error_code="MEMBERSHIP_RESUME_NOT_ALLOWED",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"멤버십 해지 예약 해제 실패: {e}")
+        return error_response(
+            message="멤버십 해지 예약 해제 중 오류가 발생했습니다",
+            error_code="MEMBERSHIP_RESUME_ERROR",
         )
 
 @router.get("/check/{required_level}")

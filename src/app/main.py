@@ -71,6 +71,7 @@ website_service = ServiceFactory.get_website_service()
 script_service = ServiceFactory.get_script_service()
 thread_service = ServiceFactory.get_thread_service()
 membership_service = ServiceFactory.get_membership_service()
+paddle_client = ServiceFactory.get_paddle_billing_client()
 
 security = HTTPBearer()
 

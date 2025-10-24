@@ -216,6 +216,13 @@ async def process_paddle_payload(
     )
     next_billing_at = _parse_datetime(next_billing_raw)
 
+    subscription_id = (
+        _get(data, "subscription", "id")
+        or _get(payload, "subscription", "id")
+        or _get(data, "object", "subscription_id")
+        or _get(payload, "object", "subscription_id")
+    )
+
     if not items:
         items = _get(data, "object", "items", default=[]) or _get(payload, "object", "items", default=[])
 
@@ -423,6 +430,7 @@ async def process_paddle_payload(
                         target_level=1,
                         duration_days=30 * membership_count,
                         next_billing_at=next_billing_at,
+                        paddle_subscription_id=subscription_id,
                     )
                     res_data = res if isinstance(res, dict) else {}
                     results["membership"] = {
@@ -591,7 +599,7 @@ async def process_paddle_payload(
                     success = bool(res)
                     action = "downgraded"
                 else:
-                    res = await membership_service.cancel_membership(uid)  # type: ignore[attr-defined]
+                    res = await membership_service.cancel_membership(uid, trigger_source="webhook")  # type: ignore[attr-defined]
                     success = bool(res)
                     action = "scheduled"
                 results["cancellation"] = {
@@ -624,6 +632,7 @@ async def process_paddle_payload(
         "raw_payload": payload,
         "currency": currency,
         "price_ids": summary["price_ids"],
+        "subscription_id": subscription_id,
     }
 
     if replay_reason:
