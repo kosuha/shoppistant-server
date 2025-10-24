@@ -166,7 +166,11 @@ jobs:
           echo "PADDLE_WEBHOOK_STRICT_VERIFY=${{ secrets.PADDLE_WEBHOOK_STRICT_VERIFY }}" >> .env
           echo "PADDLE_PRICE_ID_MEMBERSHIP=${{ secrets.PADDLE_PRICE_ID_MEMBERSHIP }}" >> .env
           echo "PADDLE_PRICE_ID_CREDITS=${{ secrets.PADDLE_PRICE_ID_CREDITS }}" >> .env
+          echo "PADDLE_PRODUCT_ID_MEMBERSHIP=${{ secrets.PADDLE_PRODUCT_ID_MEMBERSHIP }}" >> .env
+          echo "PADDLE_PRODUCT_ID_CREDITS=${{ secrets.PADDLE_PRODUCT_ID_CREDITS }}" >> .env
           echo "CREDITS_UNIT_PRICE_USD=${{ secrets.CREDITS_UNIT_PRICE_USD }}" >> .env
+          echo "PADDLE_API_KEY=${{ secrets.PADDLE_API_KEY }}" >> .env
+          echo "PADDLE_API_BASE_URL=${{ secrets.PADDLE_API_BASE_URL }}" >> .env
           
           # 전체 스택 재시작 (의존성 때문에)
           echo "Restarting all services..."
