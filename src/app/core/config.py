@@ -1,13 +1,35 @@
 """
 애플리케이션 설정 관리
 """
-import os
+from pathlib import Path
 from typing import Optional
-from pydantic import BaseModel, validator
-from pydantic_settings import BaseSettings
-from dotenv import load_dotenv
 
-load_dotenv()
+from dotenv import load_dotenv
+from pydantic import validator
+from pydantic_settings import BaseSettings
+
+
+_CONFIG_DIR = Path(__file__).resolve().parents[3]
+_REPO_ROOT = _CONFIG_DIR.parent
+
+
+def _load_dotenv_files() -> None:
+    """프로젝트 전체에서 활용할 .env 파일들을 순차적으로 로드"""
+
+    # 우선순위: 서버 전용 환경 -> 로컬 오버라이드 -> 저장소 루트 공통 설정
+    dotenv_order = [
+        _CONFIG_DIR / ".env",
+        _CONFIG_DIR / ".env.local",
+        _REPO_ROOT / ".env",
+        _REPO_ROOT / ".env.local",
+    ]
+
+    for dotenv_path in dotenv_order:
+        if dotenv_path.exists():
+            load_dotenv(dotenv_path, override=False)
+
+
+_load_dotenv_files()
 
 class Settings(BaseSettings):
     """애플리케이션 설정"""
@@ -71,7 +93,10 @@ class Settings(BaseSettings):
         return v
     
     class Config:
-        env_file = ".env"
+        env_file = (
+            str(_CONFIG_DIR / ".env"),
+            str(_CONFIG_DIR / ".env.local"),
+        )
         case_sensitive = True
         extra = "allow"  # 추가 환경변수 허용
 
