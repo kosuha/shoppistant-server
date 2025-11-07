@@ -19,7 +19,7 @@ class TokenUsageCalculator:
     
     
     # USD to KRW 환율 (대략적인 값)
-    USD_TO_KRW_RATE = 1350
+    USD_TO_KRW_RATE = 1450
     
     @classmethod
     def calculate_cost(cls, usage_metadata, model_name: str = "gemini-2.5-pro", 
