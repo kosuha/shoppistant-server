@@ -657,6 +657,7 @@ class MembershipService(BaseService, IMembershipService):
                 'days_remaining': self._get_days_remaining(membership),
                 'cancel_at_period_end': membership.get('cancel_at_period_end', False),
                 'cancel_requested_at': membership.get('cancel_requested_at'),
+                'management_urls': membership.get('management_urls'),
             }
             
             if expires_at:
