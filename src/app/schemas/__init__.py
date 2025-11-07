@@ -198,6 +198,10 @@ class MembershipStatus(BaseModel):
     days_remaining: Optional[int] = Field(None, description="남은 일수")
     cancel_at_period_end: Optional[bool] = Field(False, description="만료 시 자동 해지 예정 여부")
     cancel_requested_at: Optional[datetime] = Field(None, description="해지 요청 일시")
+    management_urls: Optional[Dict[str, Optional[str]]] = Field(
+        default=None,
+        description="구독 관리용 URL (결제수단 변경/해지 등)",
+    )
 
 class MembershipSubscriptionSyncRequest(BaseModel):
     """프런트엔드에서 구독 동기화를 요청할 때 사용하는 모델"""
