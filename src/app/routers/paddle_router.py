@@ -440,10 +440,6 @@ async def _handle_unhandled_event(_: PaddleHandlerContext) -> HandlerResult:
 
 TRANSACTION_PAYMENT_EVENTS = {
     "transaction.completed",
-    "transaction.paid",
-    "transaction.payment_succeeded",
-    "transaction.payment_successful",
-    "transaction.payment_collected",
 }
 
 TRANSACTION_STATE_EVENTS = {
@@ -477,15 +473,6 @@ HANDLER_MAP: Dict[str, HandlerFunc] = {
     **{name: _handle_payment_method_event for name in PAYMENT_METHOD_EVENTS},
 }
 
-TRANSACTION_PAYMENT_KEYWORDS = (
-    "completed",
-    "paid",
-    "payment_succeeded",
-    "payment_successful",
-    "payment_collected",
-    "payment_recovered",
-)
-
 TRANSACTION_REFUND_KEYWORDS = (
     "refund",
     "chargeback",
@@ -505,7 +492,7 @@ def _resolve_handler(event_type_normalized: str) -> HandlerFunc:
         return handler
 
     if event_type_normalized.startswith("transaction."):
-        if any(keyword in event_type_normalized for keyword in TRANSACTION_PAYMENT_KEYWORDS):
+        if event_type_normalized == "transaction.completed":
             return _handle_transaction_payment
         return _handle_transaction_state_change
 
