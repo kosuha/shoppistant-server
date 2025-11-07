@@ -13,7 +13,8 @@ import logging
 import hmac
 import hashlib
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request, Header, HTTPException
@@ -24,6 +25,33 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/webhooks", tags=["webhooks", "paddle"])
 
+
+HandlerResult = Tuple[Optional[str], Dict[str, Any]]
+HandlerFunc = Callable[["PaddleHandlerContext"], Awaitable[HandlerResult]]
+
+
+@dataclass(slots=True)
+class PaddleHandlerContext:
+    event_type: str
+    event_type_normalized: str
+    payload: Dict[str, Any]
+    data: Dict[str, Any]
+    membership_service: Any
+    db_helper: Any
+    uid: Optional[str]
+    email: Optional[str]
+    transaction_id: Optional[str]
+    subscription_id: Optional[str]
+    event_id: Optional[str]
+    membership_count: int
+    credit_quantity: int
+    credit_amount_usd: Decimal
+    credit_units_total: Decimal
+    credit_amount_inferred: bool
+    credit_currency_mismatch: bool
+    credit_currency_codes: List[str]
+    next_billing_at: Optional[datetime]
+    credits_pack_size: Decimal
 
 def _verify_signature(raw: bytes, signature: Optional[str]) -> bool:
     """Verify Paddle-Signature if configured (Billing HMAC-SHA256)."""
@@ -126,6 +154,397 @@ def _parse_datetime(value: Any) -> Optional[datetime]:
             return dt
         except Exception:
             return None
+    return None
+
+
+async def _handle_transaction_payment(ctx: PaddleHandlerContext) -> HandlerResult:
+    results: Dict[str, Any] = {}
+    membership_count = ctx.membership_count
+    credit_quantity = ctx.credit_quantity
+    credit_amount_usd = ctx.credit_amount_usd
+    credit_units_total = ctx.credit_units_total
+
+    if membership_count == 0 and credit_quantity == 0:
+        results.setdefault("info", "no mapped items")
+
+    if membership_count > 0:
+        if not ctx.uid:
+            results["membership"] = {"success": False, "reason": "missing_user"}
+        elif not ctx.membership_service:
+            results["membership"] = {"success": False, "reason": "service_unavailable"}
+        else:
+            try:
+                res = await ctx.membership_service.upgrade_membership(  # type: ignore[attr-defined]
+                    user_id=ctx.uid,
+                    target_level=1,
+                    duration_days=30 * membership_count,
+                    next_billing_at=ctx.next_billing_at,
+                    paddle_subscription_id=ctx.subscription_id,
+                )
+                res_data = res if isinstance(res, dict) else {}
+                resubscribe_detected = bool(res_data.get("resubscribe_detected"))
+                if resubscribe_detected:
+                    previous_subscription_id = res_data.pop("previous_subscription_id", None)
+                    previous_subscription_status = res_data.pop("previous_subscription_status", None)
+                    cancel_flags_cleared = res_data.pop("cancel_flags_cleared", None)
+                    status_check_correlation_id = res_data.pop("status_check_correlation_id", None)
+                    res_data.pop("resubscribe_detected", None)
+
+                results["membership"] = {
+                    "success": bool(res_data),
+                    "data": res_data,
+                }
+                if resubscribe_detected:
+                    results["membership"]["resubscribe_detected"] = True
+                    resubscribe_info = {}
+                    if previous_subscription_id:
+                        resubscribe_info["previous_subscription_id"] = previous_subscription_id
+                    if previous_subscription_status:
+                        resubscribe_info["previous_subscription_status"] = previous_subscription_status
+                    if cancel_flags_cleared is not None:
+                        resubscribe_info["cancel_flags_cleared"] = cancel_flags_cleared
+                    if status_check_correlation_id:
+                        resubscribe_info["status_check_correlation_id"] = status_check_correlation_id
+                    if resubscribe_info:
+                        resubscribe_info["subscription_id"] = ctx.subscription_id
+                        results["membership"]["resubscribe"] = resubscribe_info
+                if not res_data:
+                    results["membership"]["error"] = "membership_update_failed"
+            except Exception as e:
+                logger.error(f"[PADDLE] membership update failed: {e}")
+                results["membership"] = {"success": False, "error": "membership_update_failed"}
+
+    if credit_quantity > 0:
+        credit_result: Dict[str, Any] = {
+            "credit_units": float(credit_units_total) if credit_units_total else 0,
+            "credit_packs": credit_quantity,
+            "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
+            "inferred": ctx.credit_amount_inferred,
+            "currencies": sorted(ctx.credit_currency_codes) if ctx.credit_currency_codes else [],
+            "success": False,
+        }
+
+        if ctx.credit_currency_mismatch:
+            credit_result["error"] = "unsupported_currency"
+        elif not ctx.uid:
+            credit_result["error"] = "missing_user"
+        elif not ctx.membership_service:
+            credit_result["error"] = "service_unavailable"
+        elif not ctx.db_helper:
+            credit_result["error"] = "service_unavailable"
+        else:
+            membership_data: Optional[Dict[str, Any]] = None
+            try:
+                membership_data = await ctx.membership_service.get_user_membership(ctx.uid)  # type: ignore[attr-defined]
+            except Exception as membership_err:
+                logger.error("[PADDLE] membership lookup failed for credits: %s", membership_err)
+
+            membership_level = 0
+            membership_active = False
+            if isinstance(membership_data, dict):
+                raw_level = membership_data.get("membership_level", 0)
+                try:
+                    membership_level = int(raw_level)
+                except (TypeError, ValueError):
+                    membership_level = 0
+                is_expired = membership_data.get("is_expired")
+                membership_active = membership_level > 0 and is_expired is False
+
+            if not membership_active:
+                credit_result["error"] = "membership_required"
+                logger.warning(
+                    "[PADDLE] credit purchase blocked - membership inactive (event %s, uid=%s, level=%s)",
+                    ctx.event_id,
+                    ctx.uid,
+                    membership_level,
+                )
+            else:
+                try:
+                    credit_metadata = {
+                        "provider": "paddle",
+                        "event_id": ctx.event_id,
+                        "transaction_id": ctx.transaction_id,
+                        "quantity": credit_quantity,
+                        "pack_size": float(ctx.credits_pack_size) if ctx.credits_pack_size else None,
+                        "credits_granted": float(credit_units_total) if credit_units_total else 0,
+                        "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
+                        "inferred": ctx.credit_amount_inferred,
+                        "currencies": sorted(ctx.credit_currency_codes) if ctx.credit_currency_codes else None,
+                    }
+                    tx = await ctx.db_helper.credit_wallet(  # type: ignore
+                        ctx.uid,
+                        float(credit_units_total) if credit_units_total else float(credit_quantity),
+                        metadata=credit_metadata,
+                        source_event_id=ctx.event_id,
+                    )
+                    credit_result["success"] = bool(tx)
+                    credit_result["transaction_recorded"] = bool(tx)
+                except Exception as e:
+                    logger.error(f"[PADDLE] wallet credit failed: {e}")
+                    credit_result["error"] = "credit_failed"
+
+        results["credits"] = credit_result
+
+    return "payment", results
+
+
+async def _handle_transaction_state_change(ctx: PaddleHandlerContext) -> HandlerResult:
+    event_lower = ctx.event_type_normalized
+    is_refund = any(keyword in event_lower for keyword in TRANSACTION_REFUND_KEYWORDS)
+
+    if not is_refund:
+        return "transaction_state", {"info": "transaction event ignored"}
+
+    results: Dict[str, Any] = {}
+
+    if ctx.membership_count > 0:
+        if not ctx.uid:
+            results["membership_refund"] = {"success": False, "reason": "missing_user"}
+        elif not ctx.membership_service:
+            results["membership_refund"] = {"success": False, "reason": "service_unavailable"}
+        else:
+            try:
+                res = await ctx.membership_service.force_downgrade_to_free(ctx.uid)  # type: ignore[attr-defined]
+                success = bool(res)
+                results["membership_refund"] = {
+                    "success": success,
+                    "data": res if success else None,
+                }
+                if not success:
+                    results["membership_refund"]["error"] = "downgrade_failed"
+            except Exception as e:
+                logger.error(f"[PADDLE] membership refund handling failed: {e}")
+                results["membership_refund"] = {"success": False, "error": "internal_error"}
+
+    if ctx.credit_quantity > 0:
+        credit_result: Dict[str, Any] = {
+            "credit_units": float(ctx.credit_units_total) if ctx.credit_units_total else 0,
+            "credit_packs": ctx.credit_quantity,
+            "amount_usd": float(ctx.credit_amount_usd) if ctx.credit_amount_usd else 0,
+            "inferred": ctx.credit_amount_inferred,
+            "currencies": sorted(ctx.credit_currency_codes) if ctx.credit_currency_codes else [],
+            "success": False,
+        }
+
+        if ctx.credit_currency_mismatch:
+            credit_result["error"] = "unsupported_currency"
+        elif not ctx.uid:
+            credit_result["error"] = "missing_user"
+        elif not ctx.db_helper:
+            credit_result["error"] = "service_unavailable"
+        else:
+            try:
+                debit_metadata = {
+                    "provider": "paddle",
+                    "event_id": ctx.event_id,
+                    "transaction_id": ctx.transaction_id,
+                    "quantity": ctx.credit_quantity,
+                    "amount_usd": float(ctx.credit_amount_usd) if ctx.credit_amount_usd else 0,
+                    "credits_reversed": float(ctx.credit_units_total) if ctx.credit_units_total else 0,
+                    "inferred": ctx.credit_amount_inferred,
+                    "currencies": sorted(ctx.credit_currency_codes) if ctx.credit_currency_codes else None,
+                }
+                tx = await ctx.db_helper.debit_wallet(  # type: ignore
+                    ctx.uid,
+                    float(ctx.credit_units_total) if ctx.credit_units_total else float(ctx.credit_quantity),
+                    metadata=debit_metadata,
+                    source_event_id=ctx.event_id,
+                )
+                credit_result["success"] = bool(tx)
+                credit_result["transaction_recorded"] = bool(tx)
+            except Exception as e:
+                logger.error(f"[PADDLE] wallet debit failed: {e}")
+                credit_result["error"] = "debit_failed"
+
+        results["credits_refund"] = credit_result
+
+    return "refund", results
+
+
+async def _handle_subscription_status_change(ctx: PaddleHandlerContext) -> HandlerResult:
+    results: Dict[str, Any] = {}
+    subscription_status = (
+        _get(ctx.data, "subscription", "status")
+        or ctx.data.get("status")
+        or ""
+    ).lower()
+
+    event_lower = ctx.event_type_normalized
+    is_cancel_event = (
+        "cancel" in event_lower
+        or "cancellation" in event_lower
+        or ("subscription.updated" in event_lower and subscription_status in SUBSCRIPTION_CANCEL_STATES)
+        or subscription_status in SUBSCRIPTION_CANCEL_STATES
+    )
+
+    if not is_cancel_event:
+        results["info"] = "subscription event ignored"
+        return "subscription", results
+
+    cancel_effective_raw = (
+        _get(ctx.data, "cancellation_effective_date")
+        or _get(ctx.data, "effective_date")
+        or _get(ctx.data, "effective_at")
+        or _get(ctx.data, "subscription", "cancellation_effective_date")
+        or _get(ctx.data, "subscription", "cancelled_at")
+        or _get(ctx.data, "subscription", "ended_at")
+    )
+    cancel_effective_at = _parse_datetime(cancel_effective_raw)
+    now_utc = datetime.now(timezone.utc)
+
+    if not ctx.uid:
+        results["cancellation"] = {"success": False, "reason": "missing_user"}
+    elif not ctx.membership_service:
+        results["cancellation"] = {"success": False, "reason": "service_unavailable"}
+    else:
+        try:
+            if cancel_effective_at and cancel_effective_at <= now_utc:
+                res = await ctx.membership_service.force_downgrade_to_free(ctx.uid)  # type: ignore[attr-defined]
+                success = bool(res)
+                action = "downgraded"
+            else:
+                res = await ctx.membership_service.cancel_membership(ctx.uid, trigger_source="webhook")  # type: ignore[attr-defined]
+                success = bool(res)
+                action = "scheduled"
+            results["cancellation"] = {
+                "success": success,
+                "action": action,
+                "effective_at": cancel_effective_at.isoformat() if cancel_effective_at else None,
+                "data": res if success else None,
+            }
+            if not success:
+                results["cancellation"]["error"] = "membership_not_found"
+        except ValueError as e:
+            results["cancellation"] = {"success": False, "error": str(e), "action": "not_applicable"}
+        except Exception as e:
+            logger.error(f"[PADDLE] cancellation handling failed: {e}")
+            results["cancellation"] = {"success": False, "error": "internal_error"}
+
+    return "cancellation", results
+
+
+async def _handle_payment_method_event(ctx: PaddleHandlerContext) -> HandlerResult:
+    logger.info("[PADDLE] payment method event received: %s", ctx.event_type)
+    return "payment_method", {
+        "payment_method": {
+            "success": True,
+            "info": "payment method event ignored",
+            "event_type": ctx.event_type,
+        }
+    }
+
+
+async def _handle_unhandled_event(_: PaddleHandlerContext) -> HandlerResult:
+    return None, {}
+
+
+TRANSACTION_PAYMENT_EVENTS = {
+    "transaction.completed",
+    "transaction.paid",
+    "transaction.payment_succeeded",
+    "transaction.payment_successful",
+    "transaction.payment_collected",
+}
+
+TRANSACTION_STATE_EVENTS = {
+    "transaction.refunded",
+    "transaction.payment_refunded",
+    "transaction.chargeback_created",
+    "transaction.chargeback_warning",
+    "transaction.chargeback_warning_reversed",
+    "transaction.payment_failed",
+}
+
+SUBSCRIPTION_EVENTS = {
+    "subscription.cancelled",
+    "subscription.canceled",
+    "subscription.updated",
+    "subscription.paused",
+    "subscription.resumed",
+}
+
+PAYMENT_METHOD_EVENTS = {
+    "payment_method.created",
+    "payment_method.updated",
+    "payment_method.expired",
+    "payment_method.disabled",
+}
+
+HANDLER_MAP: Dict[str, HandlerFunc] = {
+    **{name: _handle_transaction_payment for name in TRANSACTION_PAYMENT_EVENTS},
+    **{name: _handle_transaction_state_change for name in TRANSACTION_STATE_EVENTS},
+    **{name: _handle_subscription_status_change for name in SUBSCRIPTION_EVENTS},
+    **{name: _handle_payment_method_event for name in PAYMENT_METHOD_EVENTS},
+}
+
+TRANSACTION_PAYMENT_KEYWORDS = (
+    "completed",
+    "paid",
+    "payment_succeeded",
+    "payment_successful",
+    "payment_collected",
+    "payment_recovered",
+)
+
+TRANSACTION_REFUND_KEYWORDS = (
+    "refund",
+    "chargeback",
+    "warning",
+    "reverse",
+)
+
+SUBSCRIPTION_CANCEL_STATES = {"canceled", "cancelled", "inactive", "past_due", "paused"}
+
+
+def _resolve_handler(event_type_normalized: str) -> HandlerFunc:
+    if not event_type_normalized:
+        return _handle_unhandled_event
+
+    handler = HANDLER_MAP.get(event_type_normalized)
+    if handler:
+        return handler
+
+    if event_type_normalized.startswith("transaction."):
+        if any(keyword in event_type_normalized for keyword in TRANSACTION_PAYMENT_KEYWORDS):
+            return _handle_transaction_payment
+        return _handle_transaction_state_change
+
+    if event_type_normalized.startswith("subscription."):
+        return _handle_subscription_status_change
+
+    if event_type_normalized.startswith("payment_method."):
+        return _handle_payment_method_event
+
+    return _handle_unhandled_event
+
+
+def _preview_event_category(
+    handler: HandlerFunc,
+    event_type_normalized: str,
+    data: Dict[str, Any],
+) -> Optional[str]:
+    if handler is _handle_transaction_payment:
+        return "payment"
+    if handler is _handle_transaction_state_change:
+        if any(keyword in event_type_normalized for keyword in TRANSACTION_REFUND_KEYWORDS):
+            return "refund"
+        return "transaction_state"
+    if handler is _handle_subscription_status_change:
+        subscription_status = (
+            _get(data, "subscription", "status")
+            or data.get("status")
+            or ""
+        ).lower()
+        event_lower = event_type_normalized
+        is_cancel_event = (
+            "cancel" in event_lower
+            or "cancellation" in event_lower
+            or ("subscription.updated" in event_lower and subscription_status in SUBSCRIPTION_CANCEL_STATES)
+            or subscription_status in SUBSCRIPTION_CANCEL_STATES
+        )
+        return "cancellation" if is_cancel_event else "subscription"
+    if handler is _handle_payment_method_event:
+        return "payment_method"
     return None
 
 
@@ -237,21 +656,10 @@ async def process_paddle_payload(
         transaction_id,
     )
 
-    et = (event_type or "").lower()
-    subscription_status = (_get(data, "subscription", "status") or data.get("status") or "").lower()
-    cancel_states = {"canceled", "cancelled", "inactive", "past_due", "paused"}
+    event_type_normalized = (event_type or "").strip().lower()
+    handler = _resolve_handler(event_type_normalized)
 
-    event_category: str | None = None
-    if "refund" in et:
-        event_category = "refund"
-    elif "cancel" in et and "subscription" in et:
-        event_category = "cancellation"
-    elif "subscription.updated" in et and subscription_status in cancel_states:
-        event_category = "cancellation"
-    elif "completed" in et or "paid" in et or "succeeded" in et:
-        event_category = "payment"
-
-    if event_category is None:
+    if handler is _handle_unhandled_event:
         return {
             "processed": {},
             "event_id": event_id,
@@ -265,6 +673,8 @@ async def process_paddle_payload(
             "log_recorded": False,
         }
 
+    event_category_preview = _preview_event_category(handler, event_type_normalized, data)
+
     membership_service, db_helper = await _get_services()
 
     if event_id and db_helper and not allow_duplicate:
@@ -274,7 +684,7 @@ async def process_paddle_payload(
             return {
                 "processed": {},
                 "event_id": event_id,
-                "event_category": event_category,
+                "event_category": event_category_preview,
                 "status": "duplicate",
                 "duplicate": True,
                 "skip": False,
@@ -404,240 +814,54 @@ async def process_paddle_payload(
     credit_currency_mismatch = summary["credit_currency_mismatch"]
     credit_currency_codes = summary["credit_currency_codes"]
 
-    results: Dict[str, Any] = {}
-
     logger.info(
         "[PADDLE] summary membership=%s credits=%s amount=%s price_ids=%s category=%s",
         membership_count,
         credit_quantity,
         credit_amount_usd,
         summary["price_ids"],
-        event_category,
+        event_category_preview,
+    )
+    context = PaddleHandlerContext(
+        event_type=event_type,
+        event_type_normalized=event_type_normalized,
+        payload=payload,
+        data=data,
+        membership_service=membership_service,
+        db_helper=db_helper,
+        uid=uid,
+        email=email,
+        transaction_id=transaction_id,
+        subscription_id=subscription_id,
+        event_id=event_id,
+        membership_count=membership_count,
+        credit_quantity=credit_quantity,
+        credit_amount_usd=credit_amount_usd,
+        credit_units_total=credit_units_total,
+        credit_amount_inferred=credit_amount_inferred,
+        credit_currency_mismatch=credit_currency_mismatch,
+        credit_currency_codes=credit_currency_codes,
+        next_billing_at=next_billing_at,
+        credits_pack_size=credits_pack_size,
     )
 
-    if event_category == "payment":
-        if membership_count == 0 and credit_quantity == 0:
-            results.setdefault("info", "no mapped items")
+    event_category, handler_results = await handler(context)
 
-        if membership_count > 0:
-            if not uid:
-                results["membership"] = {"success": False, "reason": "missing_user"}
-            elif not membership_service:
-                results["membership"] = {"success": False, "reason": "service_unavailable"}
-            else:
-                try:
-                    res = await membership_service.upgrade_membership(  # type: ignore[attr-defined]
-                        user_id=uid,
-                        target_level=1,
-                        duration_days=30 * membership_count,
-                        next_billing_at=next_billing_at,
-                        paddle_subscription_id=subscription_id,
-                    )
-                    res_data = res if isinstance(res, dict) else {}
-                    resubscribe_detected = bool(res_data.get("resubscribe_detected"))
-                    if resubscribe_detected:
-                        previous_subscription_id = res_data.pop("previous_subscription_id", None)
-                        previous_subscription_status = res_data.pop("previous_subscription_status", None)
-                        cancel_flags_cleared = res_data.pop("cancel_flags_cleared", None)
-                        status_check_correlation_id = res_data.pop("status_check_correlation_id", None)
-                        res_data.pop("resubscribe_detected", None)
+    if event_category is None:
+        return {
+            "processed": {},
+            "event_id": event_id,
+            "event_category": None,
+            "status": "skipped",
+            "duplicate": False,
+            "skip": True,
+            "user_id": uid,
+            "user_email": email,
+            "transaction_id": transaction_id,
+            "log_recorded": False,
+        }
 
-                    results["membership"] = {
-                        "success": bool(res_data),
-                        "data": res_data,
-                    }
-                    if resubscribe_detected:
-                        results["membership"]["resubscribe_detected"] = True
-                        resubscribe_info = {}
-                        if previous_subscription_id:
-                            resubscribe_info["previous_subscription_id"] = previous_subscription_id
-                        if previous_subscription_status:
-                            resubscribe_info["previous_subscription_status"] = previous_subscription_status
-                        if cancel_flags_cleared is not None:
-                            resubscribe_info["cancel_flags_cleared"] = cancel_flags_cleared
-                        if status_check_correlation_id:
-                            resubscribe_info["status_check_correlation_id"] = status_check_correlation_id
-                        if resubscribe_info:
-                            resubscribe_info["subscription_id"] = subscription_id
-                            results["membership"]["resubscribe"] = resubscribe_info
-                    if not res_data:
-                        results["membership"]["error"] = "membership_update_failed"
-                except Exception as e:
-                    logger.error(f"[PADDLE] membership update failed: {e}")
-                    results["membership"] = {"success": False, "error": "membership_update_failed"}
-
-        if credit_quantity > 0:
-            credit_result: Dict[str, Any] = {
-                "credit_units": float(credit_units_total) if credit_units_total else 0,
-                "credit_packs": credit_quantity,
-                "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
-                "inferred": credit_amount_inferred,
-                "currencies": sorted(credit_currency_codes) if credit_currency_codes else [],
-                "success": False,
-            }
-
-            if credit_currency_mismatch:
-                credit_result["error"] = "unsupported_currency"
-            elif not uid:
-                credit_result["error"] = "missing_user"
-            elif not membership_service:
-                credit_result["error"] = "service_unavailable"
-            elif not db_helper:
-                credit_result["error"] = "service_unavailable"
-            else:
-                membership_data: Optional[Dict[str, Any]] = None
-                try:
-                    membership_data = await membership_service.get_user_membership(uid)  # type: ignore[attr-defined]
-                except Exception as membership_err:
-                    logger.error("[PADDLE] membership lookup failed for credits: %s", membership_err)
-
-                membership_level = 0
-                membership_active = False
-                if isinstance(membership_data, dict):
-                    raw_level = membership_data.get("membership_level", 0)
-                    try:
-                        membership_level = int(raw_level)
-                    except (TypeError, ValueError):
-                        membership_level = 0
-                    is_expired = membership_data.get("is_expired")
-                    membership_active = membership_level > 0 and is_expired is False
-
-                if not membership_active:
-                    credit_result["error"] = "membership_required"
-                    logger.warning(
-                        "[PADDLE] credit purchase blocked - membership inactive (event %s, uid=%s, level=%s)",
-                        event_id,
-                        uid,
-                        membership_level,
-                    )
-                else:
-                    try:
-                        credit_metadata = {
-                            "provider": "paddle",
-                            "event_id": event_id,
-                            "transaction_id": transaction_id,
-                            "quantity": credit_quantity,
-                            "pack_size": float(credits_pack_size) if credits_pack_size else None,
-                            "credits_granted": float(credit_units_total) if credit_units_total else 0,
-                            "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
-                            "inferred": credit_amount_inferred,
-                            "currencies": sorted(credit_currency_codes) if credit_currency_codes else None,
-                        }
-                        tx = await db_helper.credit_wallet(  # type: ignore
-                            uid,
-                            float(credit_units_total) if credit_units_total else float(credit_quantity),
-                            metadata=credit_metadata,
-                            source_event_id=event_id,
-                        )
-                        credit_result["success"] = bool(tx)
-                        credit_result["transaction_recorded"] = bool(tx)
-                    except Exception as e:
-                        logger.error(f"[PADDLE] wallet credit failed: {e}")
-                        credit_result["error"] = "credit_failed"
-
-            results["credits"] = credit_result
-
-    elif event_category == "refund":
-        if membership_count > 0:
-            if not uid:
-                results["membership_refund"] = {"success": False, "reason": "missing_user"}
-            elif not membership_service:
-                results["membership_refund"] = {"success": False, "reason": "service_unavailable"}
-            else:
-                try:
-                    res = await membership_service.force_downgrade_to_free(uid)  # type: ignore[attr-defined]
-                    success = bool(res)
-                    results["membership_refund"] = {
-                        "success": success,
-                        "data": res if success else None,
-                    }
-                    if not success:
-                        results["membership_refund"]["error"] = "downgrade_failed"
-                except Exception as e:
-                    logger.error(f"[PADDLE] membership refund handling failed: {e}")
-                    results["membership_refund"] = {"success": False, "error": "internal_error"}
-
-        if credit_quantity > 0:
-            credit_result = {
-                "credit_units": float(credit_units_total) if credit_units_total else 0,
-                "credit_packs": credit_quantity,
-                "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
-                "inferred": credit_amount_inferred,
-                "currencies": sorted(credit_currency_codes) if credit_currency_codes else [],
-                "success": False,
-            }
-
-            if credit_currency_mismatch:
-                credit_result["error"] = "unsupported_currency"
-            elif not uid:
-                credit_result["error"] = "missing_user"
-            elif not db_helper:
-                credit_result["error"] = "service_unavailable"
-            else:
-                try:
-                    debit_metadata = {
-                        "provider": "paddle",
-                        "event_id": event_id,
-                        "transaction_id": transaction_id,
-                        "quantity": credit_quantity,
-                        "amount_usd": float(credit_amount_usd) if credit_amount_usd else 0,
-                        "credits_reversed": float(credit_units_total) if credit_units_total else 0,
-                        "inferred": credit_amount_inferred,
-                        "currencies": sorted(credit_currency_codes) if credit_currency_codes else None,
-                    }
-                    tx = await db_helper.debit_wallet(  # type: ignore
-                        uid,
-                        float(credit_units_total) if credit_units_total else float(credit_quantity),
-                        metadata=debit_metadata,
-                        source_event_id=event_id,
-                    )
-                    credit_result["success"] = bool(tx)
-                    credit_result["transaction_recorded"] = bool(tx)
-                except Exception as e:
-                    logger.error(f"[PADDLE] wallet debit failed: {e}")
-                    credit_result["error"] = "debit_failed"
-
-            results["credits_refund"] = credit_result
-
-    elif event_category == "cancellation":
-        cancel_effective_raw = (
-            _get(data, "cancellation_effective_date")
-            or _get(data, "effective_date")
-            or _get(data, "effective_at")
-            or _get(data, "subscription", "cancellation_effective_date")
-            or _get(data, "subscription", "cancelled_at")
-            or _get(data, "subscription", "ended_at")
-        )
-        cancel_effective_at = _parse_datetime(cancel_effective_raw)
-        now_utc = datetime.now(timezone.utc)
-
-        if not uid:
-            results["cancellation"] = {"success": False, "reason": "missing_user"}
-        elif not membership_service:
-            results["cancellation"] = {"success": False, "reason": "service_unavailable"}
-        else:
-            try:
-                if cancel_effective_at and cancel_effective_at <= now_utc:
-                    res = await membership_service.force_downgrade_to_free(uid)  # type: ignore[attr-defined]
-                    success = bool(res)
-                    action = "downgraded"
-                else:
-                    res = await membership_service.cancel_membership(uid, trigger_source="webhook")  # type: ignore[attr-defined]
-                    success = bool(res)
-                    action = "scheduled"
-                results["cancellation"] = {
-                    "success": success,
-                    "action": action,
-                    "effective_at": cancel_effective_at.isoformat() if cancel_effective_at else None,
-                    "data": res if success else None,
-                }
-                if not success:
-                    results["cancellation"]["error"] = "membership_not_found"
-            except ValueError as e:
-                results["cancellation"] = {"success": False, "error": str(e), "action": "not_applicable"}
-            except Exception as e:
-                logger.error(f"[PADDLE] cancellation handling failed: {e}")
-                results["cancellation"] = {"success": False, "error": "internal_error"}
+    results = handler_results or {}
 
     status_label = "replayed" if allow_duplicate else "processed"
 

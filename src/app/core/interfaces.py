@@ -132,6 +132,11 @@ class IMembershipService(ABC):
         pass
     
     @abstractmethod
+    async def get_subscription_management_links(self, user_id: str) -> Optional[Dict[str, Optional[str]]]:
+        """Paddle 구독 관리 URL 조회"""
+        pass
+    
+    @abstractmethod
     async def batch_cleanup_expired_memberships(self) -> Dict[str, Any]:
         """만료된 멤버십 일괄 정리"""
         pass

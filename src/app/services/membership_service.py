@@ -20,6 +20,8 @@ class MembershipService(BaseService, IMembershipService):
     def __init__(self, db_helper: IDatabaseHelper, paddle_client: PaddleBillingClient | None = None):
         super().__init__(db_helper)
         self.paddle_client = paddle_client
+        self._management_url_cache: Dict[str, Tuple[datetime, Dict[str, Optional[str]]]] = {}
+        self._management_url_cache_ttl = timedelta(minutes=15)
 
     async def _record_membership_error(
         self,
@@ -97,6 +99,119 @@ class MembershipService(BaseService, IMembershipService):
                 parts.append(message)
 
         return " | ".join(parts)
+
+    def _get_cached_management_urls(self, subscription_id: str) -> Optional[Dict[str, Optional[str]]]:
+        """TTL 이내 캐시된 관리 URL 반환"""
+
+        if not subscription_id:
+            return None
+
+        cached = self._management_url_cache.get(subscription_id)
+        if not cached:
+            return None
+
+        expires_at, urls = cached
+        now = datetime.now(timezone.utc)
+        if expires_at <= now:
+            self._management_url_cache.pop(subscription_id, None)
+            return None
+
+        return dict(urls)
+
+    def _set_management_url_cache(self, subscription_id: str, urls: Dict[str, Optional[str]]) -> None:
+        """관리 URL 캐시 업데이트"""
+
+        if not subscription_id or not urls:
+            self._management_url_cache.pop(subscription_id, None)
+            return
+
+        expires_at = datetime.now(timezone.utc) + self._management_url_cache_ttl
+        self._management_url_cache[subscription_id] = (expires_at, dict(urls))
+
+    @staticmethod
+    def _extract_url_value(source: Dict[str, Any], keys: List[str]) -> Optional[str]:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, str):
+                value = value.strip()
+                if value:
+                    return value
+        return None
+
+    def _extract_management_urls(self, payload: Dict[str, Any]) -> Optional[Dict[str, Optional[str]]]:
+        """Paddle 응답에서 management_urls를 정규화"""
+
+        if not isinstance(payload, dict):
+            return None
+
+        container: Dict[str, Any] = payload
+        data = payload.get("data")
+        if isinstance(data, dict) and ("management_urls" in data or "managementUrls" in data):
+            container = data
+
+        urls_raw = container.get("management_urls") or container.get("managementUrls")
+        if not isinstance(urls_raw, dict):
+            return None
+
+        normalized = {
+            "update_payment_method": self._extract_url_value(urls_raw, ["update_payment_method", "updatePaymentMethod"]),
+            "cancel": self._extract_url_value(urls_raw, ["cancel", "cancel_url", "cancelUrl"]),
+        }
+
+        if not any(normalized.values()):
+            return None
+
+        return normalized
+
+    async def _fetch_management_urls(
+        self,
+        user_id: str,
+        subscription_id: str,
+        *,
+        trigger_source: str,
+    ) -> Optional[Dict[str, Optional[str]]]:
+        """Paddle API에서 관리 URL을 조회"""
+
+        if not self.paddle_client:
+            return None
+
+        try:
+            payload = await self.paddle_client.get_subscription(subscription_id)
+        except PaddleAPIError as api_error:
+            await self._record_membership_error(
+                user_id=user_id,
+                action="subscription_management_links",
+                error=api_error,
+                subscription_id=subscription_id,
+                trigger_source=trigger_source,
+            )
+            return None
+        except Exception as exc:  # pragma: no cover - 방어적 경로
+            await self._record_membership_error(
+                user_id=user_id,
+                action="subscription_management_links",
+                error=exc,
+                subscription_id=subscription_id,
+                trigger_source=trigger_source,
+            )
+            return None
+
+        urls = self._extract_management_urls(payload)
+        if urls:
+            self._set_management_url_cache(subscription_id, urls)
+        return urls
+
+    async def _get_management_urls_for_subscription(
+        self,
+        *,
+        user_id: str,
+        subscription_id: str,
+        trigger_source: str,
+    ) -> Optional[Dict[str, Optional[str]]]:
+        cached = self._get_cached_management_urls(subscription_id)
+        if cached is not None:
+            return cached
+        return await self._fetch_management_urls(user_id, subscription_id, trigger_source=trigger_source)
     
     async def _fetch_subscription_status(
         self,
@@ -160,11 +275,45 @@ class MembershipService(BaseService, IMembershipService):
             if 'cancel_requested_at' not in result:
                 result['cancel_requested_at'] = None
 
+            subscription_id: Optional[str] = membership.get('paddle_subscription_id')
+            management_urls: Optional[Dict[str, Optional[str]]] = None
+            if isinstance(subscription_id, str):
+                normalized = subscription_id.strip()
+                if normalized:
+                    management_urls = await self._get_management_urls_for_subscription(
+                        user_id=user_id,
+                        subscription_id=normalized,
+                        trigger_source="membership_lookup",
+                    )
+
+            result['management_urls'] = management_urls
+
             return result
             
         except Exception as e:
             self.logger.error(f"멤버십 조회 실패: {e}")
             return None
+
+    async def get_subscription_management_links(self, user_id: str) -> Optional[Dict[str, Optional[str]]]:
+        """Paddle 구독 관리 URL을 반환"""
+
+        membership = await self.db_helper.get_user_membership(user_id)
+        if not membership:
+            return None
+
+        subscription_id = membership.get('paddle_subscription_id')
+        if not isinstance(subscription_id, str):
+            return None
+
+        normalized = subscription_id.strip()
+        if not normalized:
+            return None
+
+        return await self._get_management_urls_for_subscription(
+            user_id=user_id,
+            subscription_id=normalized,
+            trigger_source="management_link_request",
+        )
 
     async def sync_paddle_subscription(
         self,

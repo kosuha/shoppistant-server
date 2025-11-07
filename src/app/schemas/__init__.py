@@ -184,6 +184,10 @@ class UserMembership(BaseModel):
     cancel_requested_at: Optional[datetime] = Field(None, description="해지 요청 일시")
     created_at: Optional[datetime] = Field(default=None, description="생성 시간")
     updated_at: Optional[datetime] = Field(default=None, description="수정 시간")
+    management_urls: Optional[Dict[str, Optional[str]]] = Field(
+        default=None,
+        description="Paddle 구독 관리 URL (update_payment_method/cancel)",
+    )
 
 class MembershipStatus(BaseModel):
     """멤버십 상태 모델"""
@@ -205,6 +209,27 @@ class MembershipSubscriptionSyncRequest(BaseModel):
     items: Optional[List[Dict[str, Any]]] = Field(default=None, description="Checkout items 데이터")
     attempt_id: Optional[str] = Field(None, description="클라이언트에서 생성한 결제 시도 ID")
     source: Optional[str] = Field(None, description="결제 요청 소스 식별자")
+
+
+class ManagementLinkTrackingRequest(BaseModel):
+    """Buyer Portal 이동 로깅 요청"""
+
+    link_type: Literal["update_payment_method", "cancel", "portal"] = Field(
+        ...,
+        description="Buyer Portal 링크 유형 (결제수단 변경/구독 취소/기타 포털 링크)",
+    )
+    destination_url: Optional[str] = Field(
+        default=None,
+        description="연결되는 실제 Buyer Portal URL (선택 입력)",
+    )
+    source: Optional[str] = Field(
+        default=None,
+        description="클릭이 발생한 화면 또는 버튼 식별자",
+    )
+    client_context: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="추가 메타데이터 (예: device, experiment)",
+    )
 
 class MembershipUpgradeRequest(BaseModel):
     """멤버십 업그레이드 요청"""

@@ -3,9 +3,10 @@
 사용자 멤버십 조회, 업그레이드, 연장 등의 엔드포인트 제공
 """
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse, urlunparse
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from core.responses import success_response, error_response
@@ -18,6 +19,7 @@ from schemas import (
     MembershipStatusResponse,
     BatchCleanupResult,
     MembershipSubscriptionSyncRequest,
+    ManagementLinkTrackingRequest,
 )
 from services.paddle_billing_client import PaddleAPIError
 
@@ -34,6 +36,69 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 # 멤버십 서비스 전역 변수 (main.py에서 설정됨)
 membership_service = None
+
+
+def _sanitize_buyer_portal_url(url: Optional[str]) -> Optional[str]:
+    """Ensure only HTTPS Buyer Portal URLs are persisted for auditing."""
+
+    if not url or not isinstance(url, str):
+        return None
+
+    candidate = url.strip()
+    if not candidate:
+        return None
+
+    try:
+        parsed = urlparse(candidate)
+    except ValueError:
+        return None
+
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        return None
+
+    # Drop query/fragment to avoid storing one-time tokens.
+    sanitized = parsed._replace(query="", fragment="")
+    return urlunparse(sanitized)
+
+
+async def _record_buyer_portal_event(
+    *,
+    db_helper,
+    user_id: str,
+    membership_id: Optional[str],
+    subscription_id: Optional[str],
+    link_type: str,
+    destination_url: Optional[str],
+    source: Optional[str],
+    client_context: Optional[Dict[str, Any]],
+    ip_address: Optional[str],
+    user_agent: Optional[str],
+) -> bool:
+    """Persist audit trail for Buyer Portal redirects without affecting flow."""
+
+    sanitized_url = _sanitize_buyer_portal_url(destination_url)
+    payload: Dict[str, Any] = {
+        "action": "open_paddle_management_link",
+        "link_type": link_type,
+        "source": source or "membership_settings",
+        "membership_id": membership_id,
+        "paddle_subscription_id": subscription_id,
+        "destination_url": sanitized_url,
+        "client_context": client_context or {},
+        "destination_url_provided": bool(destination_url and destination_url.strip()),
+    }
+
+    try:
+        return await db_helper.log_system_event(
+            user_id=user_id,
+            event_type="buyer_portal_redirect",
+            event_data=payload,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+    except Exception as exc:  # pragma: no cover - defensively log only
+        logger.warning("Buyer Portal 감사 이벤트 기록 실패: %s", exc)
+        return False
 
 def set_dependencies(user_dependency, membership_svc):
     """의존성 설정 (main.py에서 호출)"""
@@ -187,6 +252,59 @@ async def get_membership(
             message="멤버십 조회 중 오류가 발생했습니다",
             error_code="MEMBERSHIP_FETCH_ERROR"
         )
+
+
+@router.post("/management-links/log")
+async def log_management_link_event(
+    body: ManagementLinkTrackingRequest,
+    request: Request,
+    current_user = Depends(get_current_user),
+):
+    """Buyer Portal 이동 전에 서버에 감사 로그를 남긴다."""
+
+    if not current_user:
+        raise HTTPException(status_code=401, detail="인증이 필요합니다")
+
+    from main import db_helper
+
+    if not db_helper:
+        return error_response(
+            message="로깅 시스템을 사용할 수 없습니다",
+            error_code="LOGGING_UNAVAILABLE",
+        )
+
+    user_id = current_user.id
+    membership_data = await membership_service.get_user_membership(user_id) if membership_service else None
+    membership_id: Optional[str] = None
+    subscription_id: Optional[str] = None
+    if isinstance(membership_data, dict):
+        membership_id = membership_data.get("id")
+        subscription_id = membership_data.get("paddle_subscription_id")
+
+    client_host = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+
+    logged = await _record_buyer_portal_event(
+        db_helper=db_helper,
+        user_id=user_id,
+        membership_id=membership_id,
+        subscription_id=subscription_id,
+        link_type=body.link_type,
+        destination_url=body.destination_url,
+        source=body.source,
+        client_context=body.client_context,
+        ip_address=client_host,
+        user_agent=user_agent,
+    )
+
+    return success_response(
+        data={
+            "logged": logged,
+            "membership_id": membership_id,
+            "paddle_subscription_id": subscription_id,
+        },
+        message="Buyer Portal 이동 로그를 기록했습니다",
+    )
 
 @router.get("/status", response_model=MembershipStatusResponse)
 async def get_membership_status(
