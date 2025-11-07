@@ -150,3 +150,18 @@ class IMembershipService(ABC):
     ) -> Dict[str, Any]:
         """사용자 멤버십에 Paddle 구독 ID를 동기화"""
         pass
+
+    @abstractmethod
+    async def sync_subscription_schedule(
+        self,
+        user_id: str,
+        *,
+        subscription_id: Optional[str] = None,
+        next_billing_at: Optional[datetime] = None,
+        billing_period_ends_at: Optional[datetime] = None,
+        status: Optional[str] = None,
+        trigger_source: str = "subscription_webhook",
+        clear_cancellation_flags: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """구독 웹훅 기반 청구 일정/상태 동기화"""
+        pass

@@ -377,10 +377,6 @@ async def _handle_subscription_status_change(ctx: PaddleHandlerContext) -> Handl
         or subscription_status in SUBSCRIPTION_CANCEL_STATES
     )
 
-    if not is_cancel_event:
-        results["info"] = "subscription event ignored"
-        return "subscription", results
-
     cancel_effective_raw = (
         _get(ctx.data, "cancellation_effective_date")
         or _get(ctx.data, "effective_date")
@@ -391,6 +387,57 @@ async def _handle_subscription_status_change(ctx: PaddleHandlerContext) -> Handl
     )
     cancel_effective_at = _parse_datetime(cancel_effective_raw)
     now_utc = datetime.now(timezone.utc)
+
+    if not is_cancel_event:
+        if not ctx.uid:
+            results["subscription_sync"] = {"success": False, "reason": "missing_user"}
+        elif not ctx.membership_service:
+            results["subscription_sync"] = {"success": False, "reason": "service_unavailable"}
+        else:
+            billing_period_data = (
+                _get(ctx.data, "billing_period")
+                or _get(ctx.data, "subscription", "billing_period")
+                or {}
+            )
+            billing_period_end_raw = (
+                _get(billing_period_data, "ends_at")
+                or _get(billing_period_data, "end")
+                or _get(billing_period_data, "end_at")
+            )
+            billing_period_end = _parse_datetime(billing_period_end_raw)
+            subscription_identifier = ctx.subscription_id or _get(ctx.data, "id") or _get(ctx.data, "subscription", "id")
+            clear_cancel_flags = (
+                event_lower in SUBSCRIPTION_RESUME_EVENTS
+                or (
+                    subscription_status in {"active", "trialing"}
+                    and not cancel_effective_at
+                    and event_lower != "subscription.paused"
+                )
+            )
+            try:
+                synced = await ctx.membership_service.sync_subscription_schedule(  # type: ignore[attr-defined]
+                    ctx.uid,
+                    subscription_id=subscription_identifier,
+                    next_billing_at=ctx.next_billing_at,
+                    billing_period_ends_at=billing_period_end,
+                    status=subscription_status or event_lower or ctx.event_type,
+                    trigger_source=f"webhook:{ctx.event_type}",
+                    clear_cancellation_flags=clear_cancel_flags,
+                )
+                success = bool(synced)
+                results["subscription_sync"] = {
+                    "success": success,
+                    "status": subscription_status or None,
+                    "clear_cancel_flags": clear_cancel_flags,
+                    "data": synced if success else None,
+                }
+                if not success:
+                    results["subscription_sync"]["error"] = "membership_not_found"
+            except Exception as e:
+                logger.error(f"[PADDLE] subscription sync failed: {e}")
+                results["subscription_sync"] = {"success": False, "error": "internal_error"}
+
+        return "subscription", results
 
     if not ctx.uid:
         results["cancellation"] = {"success": False, "reason": "missing_user"}
@@ -454,6 +501,9 @@ TRANSACTION_STATE_EVENTS = {
 SUBSCRIPTION_EVENTS = {
     "subscription.cancelled",
     "subscription.canceled",
+    "subscription.activated",
+    "subscription.created",
+    "subscription.imported",
     "subscription.updated",
     "subscription.paused",
     "subscription.resumed",
@@ -481,6 +531,13 @@ TRANSACTION_REFUND_KEYWORDS = (
 )
 
 SUBSCRIPTION_CANCEL_STATES = {"canceled", "cancelled", "inactive", "past_due", "paused"}
+
+SUBSCRIPTION_RESUME_EVENTS = {
+    "subscription.activated",
+    "subscription.created",
+    "subscription.imported",
+    "subscription.resumed",
+}
 
 
 def _resolve_handler(event_type_normalized: str) -> HandlerFunc:
@@ -610,7 +667,10 @@ async def process_paddle_payload(
         currency = currency.upper()
 
     next_billing_raw = (
-        _get(data, "subscription", "next_billed_at")
+        _get(data, "next_billed_at")
+        or _get(data, "next_billing_at")
+        or _get(data, "next_payment_date")
+        or _get(data, "subscription", "next_billed_at")
         or _get(data, "subscription", "next_billing_at")
         or _get(data, "subscription", "next_billing_date")
         or _get(data, "subscription", "billing_period", "next_billed_at")
@@ -618,7 +678,6 @@ async def process_paddle_payload(
         or _get(data, "billing_period", "next_billing_at")
         or _get(data, "billing_period", "next_payment_date")
         or _get(data, "next_payment", "date")
-        or _get(data, "next_payment_date")
     )
     next_billing_at = _parse_datetime(next_billing_raw)
 

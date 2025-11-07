@@ -637,6 +637,100 @@ class MembershipService(BaseService, IMembershipService):
         """환불 등으로 즉시 무료 등급으로 전환"""
         return await self._downgrade_to_free(user_id)
 
+    async def sync_subscription_schedule(
+        self,
+        user_id: str,
+        *,
+        subscription_id: Optional[str] = None,
+        next_billing_at: Optional[datetime] = None,
+        billing_period_ends_at: Optional[datetime] = None,
+        status: Optional[str] = None,
+        trigger_source: str = "subscription_webhook",
+        clear_cancellation_flags: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Paddle 구독 이벤트 기반으로 멤버십 청구 일정을 동기화"""
+
+        membership = await self.db_helper.get_user_membership(user_id)
+        if not membership:
+            self.logger.warning(
+                "구독 동기화 실패 - 멤버십 정보 없음: user_id=%s subscription_id=%s",
+                user_id,
+                subscription_id,
+            )
+            return None
+
+        membership_level = int(membership.get('membership_level', 0))
+        current_expires = membership.get('expires_at')
+        expires_at = self.db_helper._parse_iso_datetime(current_expires) if current_expires else None
+        if billing_period_ends_at:
+            expires_at = billing_period_ends_at
+
+        if isinstance(next_billing_at, datetime):
+            normalized_next_billing = next_billing_at
+        else:
+            stored_next = membership.get('next_billing_at')
+            normalized_next_billing = (
+                self.db_helper._parse_iso_datetime(stored_next)
+                if stored_next
+                else None
+            )
+
+        cancel_at_period_end = bool(membership.get('cancel_at_period_end', False))
+        cancel_requested_raw = membership.get('cancel_requested_at')
+        cancel_requested_at = (
+            self.db_helper._parse_iso_datetime(cancel_requested_raw)
+            if cancel_requested_raw
+            else None
+        )
+
+        if clear_cancellation_flags:
+            cancel_at_period_end = False
+            cancel_requested_at = None
+
+        target_subscription_id = subscription_id or membership.get('paddle_subscription_id')
+
+        success = await self.db_helper.update_user_membership(
+            user_id,
+            membership_level=membership_level,
+            expires_at=expires_at,
+            next_billing_at=normalized_next_billing,
+            cancel_at_period_end=cancel_at_period_end,
+            cancel_requested_at=cancel_requested_at,
+            paddle_subscription_id=target_subscription_id,
+        )
+
+        if not success:
+            self.logger.warning(
+                "구독 일정 동기화 실패: user_id=%s subscription_id=%s",
+                user_id,
+                target_subscription_id,
+            )
+            return None
+
+        event_payload = {
+            'trigger_source': trigger_source,
+            'subscription_id': target_subscription_id,
+            'status': status,
+            'next_billing_at': normalized_next_billing.isoformat() if normalized_next_billing else None,
+            'billing_period_ends_at': expires_at.isoformat() if expires_at else None,
+            'cancel_at_period_end': cancel_at_period_end,
+        }
+
+        try:
+            await self.db_helper.log_system_event(
+                user_id=user_id,
+                event_type='membership_subscription_schedule_synced',
+                event_data=event_payload,
+            )
+        except Exception as log_error:  # pragma: no cover - 로깅 실패는 치명적이지 않음
+            self.logger.warning(
+                "구독 일정 동기화 로그 기록 실패: user_id=%s error=%s",
+                user_id,
+                log_error,
+            )
+
+        return await self.get_user_membership(user_id)
+
     async def get_membership_status(self, user_id: str) -> Dict[str, Any]:
         """멤버십 상태 상세 조회"""
         try:
