@@ -202,6 +202,14 @@ class MembershipStatus(BaseModel):
         default=None,
         description="구독 관리용 URL (결제수단 변경/해지 등)",
     )
+    subscription_status: Optional[str] = Field(
+        default=None,
+        description="Paddle 구독 상태 값 (subscription.updated data.status)",
+    )
+    subscription_status_recorded_at: Optional[datetime] = Field(
+        default=None,
+        description="위 상태가 기록된 시각",
+    )
 
 class MembershipSubscriptionSyncRequest(BaseModel):
     """프런트엔드에서 구독 동기화를 요청할 때 사용하는 모델"""

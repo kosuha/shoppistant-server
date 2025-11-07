@@ -368,6 +368,11 @@ async def _handle_subscription_status_change(ctx: PaddleHandlerContext) -> Handl
         or ctx.data.get("status")
         or ""
     ).lower()
+    subscription_identifier = (
+        ctx.subscription_id
+        or _get(ctx.data, "id")
+        or _get(ctx.data, "subscription", "id")
+    )
 
     event_lower = ctx.event_type_normalized
     is_cancel_event = (
@@ -375,6 +380,10 @@ async def _handle_subscription_status_change(ctx: PaddleHandlerContext) -> Handl
         or "cancellation" in event_lower
         or ("subscription.updated" in event_lower and subscription_status in SUBSCRIPTION_CANCEL_STATES)
         or subscription_status in SUBSCRIPTION_CANCEL_STATES
+    )
+    is_direct_cancel_event = event_lower in SUBSCRIPTION_IMMEDIATE_CANCEL_EVENTS
+    is_cancel_status_update = (
+        event_lower == "subscription.updated" and subscription_status in SUBSCRIPTION_CANCEL_STATES
     )
 
     cancel_effective_raw = (
@@ -405,7 +414,6 @@ async def _handle_subscription_status_change(ctx: PaddleHandlerContext) -> Handl
                 or _get(billing_period_data, "end_at")
             )
             billing_period_end = _parse_datetime(billing_period_end_raw)
-            subscription_identifier = ctx.subscription_id or _get(ctx.data, "id") or _get(ctx.data, "subscription", "id")
             clear_cancel_flags = (
                 event_lower in SUBSCRIPTION_RESUME_EVENTS
                 or (
@@ -444,8 +452,14 @@ async def _handle_subscription_status_change(ctx: PaddleHandlerContext) -> Handl
     elif not ctx.membership_service:
         results["cancellation"] = {"success": False, "reason": "service_unavailable"}
     else:
+        cancellation_mode = "immediate" if is_direct_cancel_event else "scheduled"
+        if not is_direct_cancel_event:
+            if is_cancel_status_update:
+                cancellation_mode = "scheduled"
+            elif cancel_effective_at and cancel_effective_at <= now_utc:
+                cancellation_mode = "immediate"
         try:
-            if cancel_effective_at and cancel_effective_at <= now_utc:
+            if cancellation_mode == "immediate":
                 res = await ctx.membership_service.force_downgrade_to_free(ctx.uid)  # type: ignore[attr-defined]
                 success = bool(res)
                 action = "downgraded"
@@ -457,10 +471,22 @@ async def _handle_subscription_status_change(ctx: PaddleHandlerContext) -> Handl
                 "success": success,
                 "action": action,
                 "effective_at": cancel_effective_at.isoformat() if cancel_effective_at else None,
+                "mode": cancellation_mode,
                 "data": res if success else None,
             }
             if not success:
                 results["cancellation"]["error"] = "membership_not_found"
+            derived_status = subscription_status or ("canceled" if cancellation_mode == "immediate" else None)
+            if ctx.membership_service and ctx.uid and derived_status:
+                try:
+                    await ctx.membership_service.record_subscription_status(  # type: ignore[attr-defined]
+                        ctx.uid,
+                        status=derived_status,
+                        subscription_id=subscription_identifier,
+                        trigger_source=f"webhook:{ctx.event_type}",
+                    )
+                except Exception as log_error:
+                    logger.warning("[PADDLE] 구독 상태 업데이트 실패: %s", log_error)
         except ValueError as e:
             results["cancellation"] = {"success": False, "error": str(e), "action": "not_applicable"}
         except Exception as e:
@@ -531,6 +557,7 @@ TRANSACTION_REFUND_KEYWORDS = (
 )
 
 SUBSCRIPTION_CANCEL_STATES = {"canceled", "cancelled", "inactive", "past_due", "paused"}
+SUBSCRIPTION_IMMEDIATE_CANCEL_EVENTS = {"subscription.canceled", "subscription.cancelled"}
 
 SUBSCRIPTION_RESUME_EVENTS = {
     "subscription.activated",

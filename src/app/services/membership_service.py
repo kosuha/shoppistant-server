@@ -252,6 +252,34 @@ class MembershipService(BaseService, IMembershipService):
         if status_raw is None:
             return None, None
         return str(status_raw).lower(), None
+
+    async def record_subscription_status(
+        self,
+        user_id: str,
+        status: Optional[str],
+        *,
+        subscription_id: Optional[str] = None,
+        trigger_source: str = "webhook",
+    ) -> None:
+        """Paddle 구독 상태를 멤버십 레코드에 저장"""
+
+        normalized_status = status.strip().lower() if isinstance(status, str) else None
+        update_fields: Dict[str, Any] = {
+            'subscription_status': normalized_status,
+            'subscription_status_updated_at': datetime.now(timezone.utc),
+        }
+
+        if subscription_id:
+            update_fields['paddle_subscription_id'] = subscription_id
+
+        updated = await self.db_helper.update_membership_fields(user_id, **update_fields)
+        if not updated:
+            self.logger.warning(
+                "구독 상태 저장 실패: user_id=%s status=%s source=%s",
+                user_id,
+                normalized_status,
+                trigger_source,
+            )
     
     async def get_user_membership(self, user_id: str) -> Dict[str, Any]:
         """사용자 멤버십 정보 조회"""
@@ -689,6 +717,11 @@ class MembershipService(BaseService, IMembershipService):
 
         target_subscription_id = subscription_id or membership.get('paddle_subscription_id')
 
+        status_kwargs: Dict[str, Any] = {}
+        if status is not None:
+            status_kwargs['subscription_status'] = status
+            status_kwargs['subscription_status_updated_at'] = datetime.now(timezone.utc)
+
         success = await self.db_helper.update_user_membership(
             user_id,
             membership_level=membership_level,
@@ -697,6 +730,7 @@ class MembershipService(BaseService, IMembershipService):
             cancel_at_period_end=cancel_at_period_end,
             cancel_requested_at=cancel_requested_at,
             paddle_subscription_id=target_subscription_id,
+            **status_kwargs,
         )
 
         if not success:
@@ -753,11 +787,14 @@ class MembershipService(BaseService, IMembershipService):
                 'cancel_requested_at': membership.get('cancel_requested_at'),
                 'management_urls': membership.get('management_urls'),
             }
-            
+
+            status['subscription_status'] = membership.get('subscription_status')
+            status['subscription_status_recorded_at'] = membership.get('subscription_status_updated_at')
+
             if expires_at:
                 expires_dt = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
                 status['expires_in_days'] = (expires_dt - datetime.now().replace(tzinfo=expires_dt.tzinfo)).days
-            
+
             return status
             
         except Exception as e:

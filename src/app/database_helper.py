@@ -298,6 +298,35 @@ class DatabaseHelper:
             logger.error(f"시스템 로그 기록 실패: {e}")
             return False
 
+    async def update_membership_fields(self, user_id: str, **fields: Any) -> bool:
+        """멤버십 레코드의 일부 필드만 부분 업데이트"""
+        normalized: Dict[str, Any] = {}
+        for key, value in fields.items():
+            if value is None:
+                normalized[key] = None
+            elif isinstance(value, datetime):
+                normalized[key] = value.isoformat()
+            else:
+                normalized[key] = value
+
+        if not normalized:
+            return False
+
+        normalized['updated_at'] = datetime.now().isoformat()
+
+        try:
+            client = self._get_client(use_admin=True)
+            result = (
+                client.table('user_memberships')
+                .update(normalized)
+                .eq('user_id', user_id)
+                .execute()
+            )
+            return bool(result.data)
+        except Exception as e:
+            logger.error(f"멤버십 부분 업데이트 실패: {e}")
+            return False
+
     async def has_processed_webhook_event(self, provider: str, event_id: str) -> bool:
         """지정한 공급자 웹훅 이벤트가 이미 처리되었는지 확인"""
         try:
@@ -820,6 +849,8 @@ class DatabaseHelper:
         cancel_at_period_end: bool = False,
         cancel_requested_at: datetime | None = None,
         paddle_subscription_id: str | None = None,
+        subscription_status: str | None = None,
+        subscription_status_updated_at: datetime | None = None,
     ) -> Dict[str, Any]:
         """새로운 사용자 멤버십 생성"""
         try:
@@ -830,6 +861,8 @@ class DatabaseHelper:
                 'next_billing_at': next_billing_at.isoformat() if next_billing_at else None,
                 'cancel_at_period_end': cancel_at_period_end,
                 'cancel_requested_at': cancel_requested_at.isoformat() if cancel_requested_at else None,
+                'subscription_status': subscription_status,
+                'subscription_status_updated_at': subscription_status_updated_at.isoformat() if subscription_status_updated_at else None,
             }
 
             if paddle_subscription_id:
@@ -854,6 +887,8 @@ class DatabaseHelper:
         cancel_at_period_end: Any = UNSET,
         cancel_requested_at: Any = UNSET,
         paddle_subscription_id: Any = UNSET,
+        subscription_status: Any = UNSET,
+        subscription_status_updated_at: Any = UNSET,
     ) -> bool:
         """사용자 멤버십 업데이트"""
         try:
@@ -876,6 +911,16 @@ class DatabaseHelper:
 
             if paddle_subscription_id is not UNSET:
                 update_data['paddle_subscription_id'] = paddle_subscription_id
+
+            if subscription_status is not UNSET:
+                update_data['subscription_status'] = subscription_status
+
+            if subscription_status_updated_at is not UNSET:
+                update_data['subscription_status_updated_at'] = (
+                    subscription_status_updated_at.isoformat()
+                    if isinstance(subscription_status_updated_at, datetime)
+                    else subscription_status_updated_at
+                )
 
             client = self._get_client(use_admin=True)
             result = client.table('user_memberships').update(update_data).eq('user_id', user_id).execute()
